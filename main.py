@@ -652,4 +652,12 @@ class MakroAPI:
             url = f'{self.base_url}listings/{listing_id}/inventory'
             payload = {'stock': stock_quantity}
 
-            response = self.ses
+            response = self.session.post(url, json=payload)
+            if response.status_code in [200, 201]:
+                return True
+            else:
+                print(f'Failed to update stock: {response.status_code}')
+                return False
+        except Exception as e:
+            print(f'Error updating stock: {e}')
+            return False
