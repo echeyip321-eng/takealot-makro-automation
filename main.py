@@ -1,3 +1,136 @@
+
+
+class SATrendAnalyzer:
+    """Analyzes South African market trends on Takealot"""
+    
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        })
+        self.trending_categories = []
+        self.seasonal_products = {}
+    
+    def get_trending_products(self):
+        """Scrape Takealot's trending/best sellers section"""
+        trending_urls = [
+            'https://www.takealot.com/best-sellers',
+            'https://www.takealot.com/deals/daily-deals'
+        ]
+        
+        trending_products = []
+        
+        for url in trending_urls:
+            try:
+                response = self.session.get(url)
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Extract trending product categories
+                category_links = soup.find_all('a', class_='category-link')
+                for link in category_links[:10]:  # Top 10 trending categories
+                    cat_name = link.get_text(strip=True)
+                    if cat_name not in self.trending_categories:
+                        self.trending_categories.append(cat_name)
+                
+                # Extract best-selling products
+                product_cards = soup.find_all('div', class_='product-card', limit=20)
+                for card in product_cards:
+                    try:
+                        title_elem = card.find('h3', class_='product-title')
+                        price_elem = card.find('span', class_='currency-value')
+                        
+                        if title_elem and price_elem:
+                            price = float(price_elem.get_text(strip=True).replace(',', '').replace('R', ''))
+                            trending_products.append({
+                                'title': title_elem.get_text(strip=True),
+                                'price': price,
+                                'source': 'trending'
+                            })
+                    except:
+                        continue
+            except Exception as e:
+                print(f'Error fetching trending: {e}')
+        
+        return trending_products
+    
+    def analyze_seasonal_trends(self):
+        """Determine what products are hot based on SA seasons"""
+        import datetime
+        month = datetime.datetime.now().month
+        
+        # South African seasons (opposite to Northern Hemisphere)
+        if month in [12, 1, 2]:  # Summer
+            return ['Fans', 'Portable Coolers', 'Swimming Pools', 'Camping Gear', 'Braai Equipment', 'Outdoor Furniture']
+        elif month in [3, 4, 5]:  # Autumn
+            return ['Heaters', 'Blankets', 'Indoor Appliances', 'Back to School', 'Home Office']
+        elif month in [6, 7, 8]:  # Winter
+            return ['Heaters', 'Electric Blankets', 'Indoor Heating', 'Winter Sports', 'Indoor Entertainment', 'Coffee Makers']
+        else:  # Spring (9, 10, 11)
+            return ['Garden Tools', 'Outdoor Equipment', 'Spring Cleaning', 'Fitness Equipment', 'Bicycle']
+    
+    def get_sa_market_sweet_spots(self):
+        """Price points that sell well in South African market"""
+        return [
+            {'range': (100, 299), 'psychology': 'Impulse buy', 'charm': 299},
+            {'range': (300, 799), 'psychology': 'Sweet spot - most popular', 'charm': 499},
+            {'range': (800, 1499), 'psychology': 'Considered purchase', 'charm': 999},
+            {'range': (1500, 2999), 'psychology': 'Premium segment', 'charm': 1999},
+        ]
+    
+    def score_product_viability(self, product, takealot_competition_count):
+        """Score product based on SA market factors"""
+        score = 0
+        
+        # Check if in trending categories
+        for cat in self.trending_categories:
+            if cat.lower() in product['title'].lower():
+                score += 30
+                break
+        
+        # Check seasonal relevance
+        seasonal = self.analyze_seasonal_trends()
+        for season_cat in seasonal:
+            if season_cat.lower() in product['title'].lower():
+                score += 25
+                break
+        
+        # Price point analysis
+        price = product.get('price', 0)
+        sweet_spots = self.get_sa_market_sweet_spots()
+        for spot in sweet_spots:
+            if spot['range'][0] <= price <= spot['range'][1]:
+                if 'Sweet spot' in spot['psychology']:
+                    score += 20
+                else:
+                    score += 10
+                break
+        
+        # Rating boost
+        if product.get('rating', 0) >= 4.5:
+            score += 15
+        elif product.get('rating', 0) >= 4.0:
+            score += 10
+        
+        # Competition penalty
+        if takealot_competition_count > 50:
+            score -= 20
+        elif takealot_competition_count > 20:
+            score -= 10
+        
+        return score
+    
+    def recommend_best_categories(self):
+        """Get recommended categories to focus on"""
+        seasonal = self.analyze_seasonal_trends()
+        
+        recommendations = {
+            'seasonal_hot': seasonal,
+            'trending': self.trending_categories[:5],
+            'evergreen': ['Air Fryers', 'Power Tools', 'Kitchen Appliances', 'Phone Accessories', 'Home Security'],
+            'sa_specific': ['Load Shedding Solutions', 'Solar Products', 'Power Banks', 'Generators', 'Inverters']
+        }
+        
+        return recommendations
 import requests
 import time
 import os
