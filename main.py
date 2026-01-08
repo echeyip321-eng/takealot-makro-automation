@@ -1,663 +1,180 @@
-import requests
-import time
 import os
-import re
-import schedule
-import json
-from datetime import datetime
-from bs4 import BeautifulSoup
-from io import BytesIO
+import time
 import logging
+import requests
+from datetime import datetime
+import schedule
 
-# Configure logging
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('automation.log'),
-        logging.StreamHandler()
+        logging.StreamHandler(),
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Enhanced Configuration
-MIN_PROFIT_MARGIN = float(os.getenv('MIN_PROFIT_MARGIN', '0.15'))  # 15% minimum profit
-MAX_RETRY_ATTEMPTS = int(os.getenv('MAX_RETRY_ATTEMPTS', '3'))
-RETRY_DELAY = int(os.getenv('RETRY_DELAY', '5'))  # seconds
-RATE_LIMIT_DELAY = float(os.getenv('RATE_LIMIT_DELAY', '2'))  # seconds between requests
-
-# Webhook for notifications (optional)
-WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')  # For Slack/Discord notifications
-
-
-class NotificationService:
-    """Sends notifications for critical events"""
-
-    @staticmethod
-    def send_webhook(message, level='info'):
-        """Send webhook notification"""
-        if not WEBHOOK_URL:
-            return
-
-        try:
-            payload = {
-                'text': f"[{level.upper()}] {message}",
-                'timestamp': datetime.now().isoformat()
-            }
-            requests.post(WEBHOOK_URL, json=payload, timeout=5)
-        except:
-            pass
-
-    @staticmethod
-    def notify_success(count, category):
-        """Notify successful listings"""
-        message = f"✅ Successfully listed {count} products in {category}"
-        logger.info(message)
-        NotificationService.send_webhook(message, 'success')
-
-    @staticmethod
-    def notify_error(error_msg):
-        """Notify critical errors"""
-        message = f"🚨 Critical Error: {error_msg}"
-        logger.error(message)
-        NotificationService.send_webhook(message, 'error')
-
-
-class ProfitCalculator:
-    """Calculate and validate profit margins, including Makro fees"""
-
-    # Makro fee structure (from official documentation)
-    PLATFORM_FEE_MONTHLY = 230  # R230/month (prorated per product for calculation)
-
-    # Commission fees by category (percentage of selling price)
-    COMMISSION_RATES = {
-        'default': 0.12,  # 12% default
-        'appliances': 0.10,
-        'electronics': 0.08,
-        'home_garden': 0.12,
-        'sports': 0.12,
-        'toys': 0.12,
-        'health_beauty': 0.10,
-        'books': 0.08,
-        'baby': 0.10
-    }
-
-    @staticmethod
-    def estimate_transport_fee(weight_grams=1000):
-        """Estimate transport fee based on product weight"""
-        if weight_grams <= 1000:
-            return 35  # Small: ~R35 average
-        elif weight_grams <= 15000:
-            return 50  # Medium: ~R50 average
-        elif weight_grams <= 30000:
-            return 75  # Medium: ~R75 average
-        elif weight_grams <= 60000:
-            return 100  # Large: ~R100 average
-        elif weight_grams <= 150000:
-            return 135  # X-Large: ~R135 average
-        else:
-            return 200  # Bulky/Oversized: ~R200 average
-
-    @staticmethod
-    def calculate_makro_fees(selling_price, category='default', weight_grams=1000, monthly_sales=30):
-        """Calculate all Makro fees for a single product"""
-        # 1. Commission fee (percentage of selling price)
-        commission_rate = ProfitCalculator.COMMISSION_RATES.get(category, 0.12)
-        commission_fee = selling_price * commission_rate
-
-        # 2. Transport fee (based on weight)
-        transport_fee = ProfitCalculator.estimate_transport_fee(weight_grams)
-
-        # 3. Platform fee (prorated per product based on estimated monthly sales)
-        platform_fee_per_product = ProfitCalculator.PLATFORM_FEE_MONTHLY / max(monthly_sales, 1)
-
-        total_fees = commission_fee + transport_fee + platform_fee_per_product
-
-        return {
-            'commission': commission_fee,
-            'transport': transport_fee,
-            'platform_prorated': platform_fee_per_product,
-            'total': total_fees,
-            'breakdown': (
-                f"Commission: R{commission_fee:.2f} + "
-                f"Transport: R{transport_fee:.2f} + "
-                f"Platform: R{platform_fee_per_product:.2f}"
-            )
-        }
-
-    @staticmethod
-    def calculate_margin(cost_price, selling_price):
-        """Calculate profit margin percentage"""
-        if cost_price <= 0:
-            return 0
-        return ((selling_price - cost_price) / cost_price) * 100
-
-    @staticmethod
-    def calculate_optimal_price(takealot_price, min_margin=MIN_PROFIT_MARGIN):
-        """Calculate optimal selling price with minimum margin, including Makro fees"""
-        target_price = takealot_price * (1 + min_margin)
-
-        attempt_price = target_price
-        for _ in range(10):  # Max 10 iterations to find optimal price
-            fees = ProfitCalculator.calculate_makro_fees(attempt_price)
-            net_profit = attempt_price - takealot_price - fees['total']
-            actual_margin = (net_profit / takealot_price) if takealot_price > 0 else 0
-
-            if actual_margin >= min_margin:
-                target_price = attempt_price
-                break
-
-            # Increase price to compensate for fees
-            attempt_price = takealot_price * (1 + min_margin) + fees['total']
-
-        # Apply charm pricing
-        if target_price < 100:
-            return round(target_price - 0.01, 2)
-        elif target_price < 1000:
-            return int(target_price) + 0.99
-        else:
-            return (int(target_price / 10) * 10) + 9.99
-
-    @staticmethod
-    def is_profitable(takealot_price, makro_price, min_margin=MIN_PROFIT_MARGIN):
-        """Check if listing meets minimum profit requirement"""
-        margin = ProfitCalculator.calculate_margin(takealot_price, makro_price)
-        # min_margin is a fraction (0.15), margin is percentage (15), so compare correctly
-        return margin >= (min_margin * 100)
-
-
-class RetryHandler:
-    """Handle retries with exponential backoff"""
-
-    @staticmethod
-    def retry_with_backoff(func, *args, max_attempts=MAX_RETRY_ATTEMPTS, **kwargs):
-        """Retry function with exponential backoff"""
-        for attempt in range(max_attempts):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                if attempt == max_attempts - 1:
-                    logger.error(f"Failed after {max_attempts} attempts: {str(e)}")
-                    raise
-
-                wait_time = RETRY_DELAY * (2 ** attempt)
-                logger.warning(f"Attempt {attempt + 1} failed, retrying in {wait_time}s...")
-                time.sleep(wait_time)
-
-
-class CompetitionMonitor:
-    """Monitor and analyze competition on Makro"""
-
-    def __init__(self, makro_api):
-        self.makro = makro_api
-        self.competition_data = {}
-
-    def check_existing_listings(self, product_title):
-        """Check if similar products exist and their prices"""
-        try:
-            search_results = self.makro.search_marketplace(product_title)
-
-            if search_results:
-                prices = [p.get('price', 0) for p in search_results]
-                return {
-                    'has_competition': True,
-                    'competitor_count': len(search_results),
-                    'lowest_price': min(prices) if prices else 0,
-                    'average_price': sum(prices) / len(prices) if prices else 0
-                }
-
-            return {'has_competition': False}
-        except:
-            return {'has_competition': False}
-
-    def adjust_price_for_competition(self, base_price, competition_data):
-        """Adjust price based on competition"""
-        if not competition_data.get('has_competition'):
-            return base_price
-
-        lowest = competition_data.get('lowest_price', 0)
-        if lowest > 0:
-            competitive_price = lowest * 0.97
-            return max(competitive_price, base_price * 0.9)
-
-        return base_price
-
-
-class PerformanceTracker:
-    """Track and log performance metrics"""
-
-    def __init__(self):
-        self.metrics = {
-            'total_processed': 0,
-            'successful_listings': 0,
-            'failed_listings': 0,
-            'total_profit_potential': 0.0,
-            'categories_processed': set(),
-            'start_time': datetime.now()
-        }
-
-    def log_success(self, product, profit_margin):
-        """Log successful listing"""
-        self.metrics['successful_listings'] += 1
-        self.metrics['total_processed'] += 1
-        self.metrics['total_profit_potential'] += profit_margin
-        logger.info(f"✓ Listed: {product['title'][:50]}... | Margin: {profit_margin:.1f}%")
-
-    def log_failure(self, product, reason):
-        """Log failed listing"""
-        self.metrics['failed_listings'] += 1
-        self.metrics['total_processed'] += 1
-        logger.warning(f"✗ Skipped: {product.get('title', 'Unknown')[:50]}... | Reason: {reason}")
-
-    def get_summary(self):
-        """Get performance summary"""
-        runtime = (datetime.now() - self.metrics['start_time']).total_seconds() / 60
-
-        return {
-            'runtime_minutes': round(runtime, 2),
-            'success_rate': (self.metrics['successful_listings'] / max(self.metrics['total_processed'], 1)) * 100,
-            **self.metrics
-        }
-
-    def print_summary(self):
-        """Print performance summary"""
-        summary = self.get_summary()
-        logger.info(f"\n{'=' * 50}")
-        logger.info("PERFORMANCE SUMMARY")
-        logger.info(f"{'=' * 50}")
-        logger.info(f"Runtime: {summary['runtime_minutes']:.1f} minutes")
-        logger.info(f"Total Processed: {summary['total_processed']}")
-        logger.info(f"Successful: {summary['successful_listings']}")
-        logger.info(f"Failed: {summary['failed_listings']}")
-        logger.info(f"Success Rate: {summary['success_rate']:.1f}%")
-        logger.info(f"Avg Profit Margin: {summary['total_profit_potential']:.1f}%")
-        logger.info(f"{'=' * 50}\n")
-
-
-class SATrendAnalyzer:
-    """Analyzes South African market trends on Takealot"""
-
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-        })
-        self.trending_categories = []
-        self.seasonal_products = {}
-
-    def get_trending_products(self):
-        """Scrape Takealot's trending/best sellers section"""
-        trending_urls = [
-            'https://www.takealot.com/best-sellers',
-            'https://www.takealot.com/deals/daily-deals'
-        ]
-
-        trending_products = []
-
-        for url in trending_urls:
-            try:
-                response = self.session.get(url)
-                soup = BeautifulSoup(response.content, 'html.parser')
-
-                category_links = soup.find_all('a', class_='category-link')
-                for link in category_links[:10]:
-                    cat_name = link.get_text(strip=True)
-                    if cat_name not in self.trending_categories:
-                        self.trending_categories.append(cat_name)
-
-                product_cards = soup.find_all('div', class_='product-card', limit=20)
-                for card in product_cards:
-                    try:
-                        title_elem = card.find('h3', class_='product-title')
-                        price_elem = card.find('span', class_='currency-value')
-
-                        if title_elem and price_elem:
-                            price = float(price_elem.get_text(strip=True).replace(',', '').replace('R', ''))
-                            trending_products.append({
-                                'title': title_elem.get_text(strip=True),
-                                'price': price,
-                                'source': 'trending'
-                            })
-                    except:
-                        continue
-            except Exception as e:
-                print(f'Error fetching trending: {e}')
-
-        return trending_products
-
-    def analyze_seasonal_trends(self):
-        """Determine what products are hot based on SA seasons"""
-        import datetime
-        month = datetime.datetime.now().month
-
-        if month in [12, 1, 2]:
-            return ['Fans', 'Portable Coolers', 'Swimming Pools', 'Camping Gear', 'Braai Equipment', 'Outdoor Furniture']
-        elif month in [3, 4, 5]:
-            return ['Heaters', 'Blankets', 'Indoor Appliances', 'Back to School', 'Home Office']
-        elif month in [6, 7, 8]:
-            return ['Heaters', 'Electric Blankets', 'Indoor Heating', 'Winter Sports', 'Indoor Entertainment', 'Coffee Makers']
-        else:
-            return ['Garden Tools', 'Outdoor Equipment', 'Spring Cleaning', 'Fitness Equipment', 'Bicycle']
-
-    def get_sa_market_sweet_spots(self):
-        """Price points that sell well in South African market"""
-        return [
-            {'range': (100, 299), 'psychology': 'Impulse buy', 'charm': 299},
-            {'range': (300, 799), 'psychology': 'Sweet spot - most popular', 'charm': 499},
-            {'range': (800, 1499), 'psychology': 'Considered purchase', 'charm': 999},
-            {'range': (1500, 2999), 'psychology': 'Premium segment', 'charm': 1999},
-        ]
-
-    def score_product_viability(self, product, takealot_competition_count):
-        """Score product based on SA market factors"""
-        score = 0
-
-        for cat in self.trending_categories:
-            if cat.lower() in product['title'].lower():
-                score += 30
-                break
-
-        seasonal = self.analyze_seasonal_trends()
-        for season_cat in seasonal:
-            if season_cat.lower() in product['title'].lower():
-                score += 25
-                break
-
-        price = product.get('price', 0)
-        sweet_spots = self.get_sa_market_sweet_spots()
-        for spot in sweet_spots:
-            if spot['range'][0] <= price <= spot['range'][1]:
-                if 'Sweet spot' in spot['psychology']:
-                    score += 20
-                else:
-                    score += 10
-                break
-
-        if product.get('rating', 0) >= 4.5:
-            score += 15
-        elif product.get('rating', 0) >= 4.0:
-            score += 10
-
-        if takealot_competition_count > 50:
-            score -= 20
-        elif takealot_competition_count > 20:
-            score -= 10
-
-        return score
-
-    def recommend_best_categories(self):
-        """Get recommended categories to focus on"""
-        seasonal = self.analyze_seasonal_trends()
-
-        recommendations = {
-            'seasonal_hot': seasonal,
-            'trending': self.trending_categories[:5],
-            'evergreen': ['Air Fryers', 'Power Tools', 'Kitchen Appliances', 'Phone Accessories', 'Home Security'],
-            'sa_specific': ['Load Shedding Solutions', 'Solar Products', 'Power Banks', 'Generators', 'Inverters']
-        }
-
-        return recommendations
-
-
-# Makro API Configuration
-MAKRO_API_KEY = os.getenv('MAKRO_API_KEY', 'ff05c866-2a98-4f55-b5f0-6a92e40f8e93')
-MAKRO_API_SECRET = os.getenv('MAKRO_API_SECRET', '6e18b3ec-be5d-46e3-ab3e-28d8f6b8fb3a')
-MAKRO_SELLER_ID = '2303'
-MAKRO_BASE_URL = 'https://api.makromarketplace.co.za/rest/v2/'
-
-# Configuration
-TARGET_CATEGORY = 'Air Fryers'
-MARKUP_MULTIPLIER = 2.8
-MAX_PRODUCTS_PER_RUN = 10
-MIN_RATING = 3.9
-MIN_PRICE_FOR_CHEAP_PRODUCTS = 450  # Products under R200 must sell for at least R450
-
-
-def apply_charm_pricing(price):
-    """Apply consumer psychology to pricing"""
-    if price < 100:
-        return round(price - 1)
-    elif price < 300:
-        return round(price / 10) * 10 - 1
-    elif price < 500:
-        return round(price / 5) * 5 - 0.05
-    elif price < 1000:
-        return round(price / 10) * 10 - 1
-    elif price < 2000:
-        return round(price / 50) * 50 - 1
-    else:
-        return round(price / 100) * 100 - 1
-
-
-class TakealotScraper:
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-        })
-
-    def search_products(self, category, limit=10):
-        """Search for products on Takealot with rating filter"""
-        url = f'https://www.takealot.com/all?qsearch={category.replace(" ", "+")}&via=search'
-        try:
-            response = self.session.get(url)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            products = []
-
-            product_cards = soup.find_all('div', class_='product-card', limit=limit * 2)
-
-            for card in product_cards:
-                try:
-                    title_elem = card.find('h3', class_='product-title')
-                    price_elem = card.find('span', class_='currency-value')
-                    link_elem = card.find('a', href=True)
-
-                    rating_elem = card.find('div', class_='rating-stars')
-                    rating = 0
-                    if rating_elem:
-                        rating_text = rating_elem.get('title', '0')
-                        rating_match = re.search(r'([0-9.]+)', rating_text)
-                        if rating_match:
-                            rating = float(rating_match.group(1))
-
-                    if rating < MIN_RATING:
-                        continue
-
-                    original_price_elem = card.find('span', class_='old-price')
-
-                    if original_price_elem:
-                        price_text = original_price_elem.get_text(strip=True)
-                    elif price_elem:
-                        price_text = price_elem.get_text(strip=True)
-                    else:
-                        continue
-
-                    price = float(price_text.replace(',', '').replace('R', '').strip())
-
-                    if title_elem and link_elem:
-                        product = {
-                            'title': title_elem.get_text(strip=True),
-                            'price': price,
-                            'rating': rating,
-                            'url': 'https://www.takealot.com' + link_elem['href'],
-                            'plid': link_elem['href'].split('/')[-1] if '/' in link_elem['href'] else None
-                        }
-                        products.append(product)
-
-                        if len(products) >= limit:
-                            break
-
-                except Exception as e:
-                    print(f'Error parsing product card: {e}')
-                    continue
-
-            return products
-        except Exception as e:
-            print(f'Error searching Takealot: {e}')
-            return []
-
-    def get_product_details(self, product_url):
-        """Get detailed product information"""
-        try:
-            response = self.session.get(product_url)
-            soup = BeautifulSoup(response.content, 'html.parser')
-
-            details = {'image_urls': []}
-
-            specs_section = soup.find('div', class_='product-specs')
-            if specs_section:
-                specs = {}
-                spec_items = specs_section.find_all('div', class_='spec-item')
-                for item in spec_items:
-                    key = item.find('span', class_='spec-key')
-                    value = item.find('span', class_='spec-value')
-                    if key and value:
-                        specs[key.get_text(strip=True)] = value.get_text(strip=True)
-                details['specifications'] = specs
-
-            desc_elem = soup.find('div', class_='product-description')
-            if desc_elem:
-                details['description'] = desc_elem.get_text(strip=True)
-
-            gallery = soup.find('div', class_='gallery')
-            if gallery:
-                img_elements = gallery.find_all('img')
-                for img in img_elements:
-                    img_url = img.get('src') or img.get('data-src')
-                    if img_url and 'http' in img_url:
-                        details['image_urls'].append(img_url)
-
-            return details
-        except Exception as e:
-            print(f'Error getting product details: {e}')
-            return {'image_urls': []}
-
-    def download_images(self, image_urls):
-        """Download product images"""
-        images = []
-        for idx, url in enumerate(image_urls[:5]):
-            try:
-                response = self.session.get(url)
-                if response.status_code == 200:
-                    images.append({
-                        'content': response.content,
-                        'filename': f'image_{idx}.jpg'
-                    })
-            except Exception as e:
-                print(f'Error downloading image {idx}: {e}')
-        return images
-
-
-class MakroAPI:
-    def __init__(self, api_key, api_secret, seller_id):
+# Configuration from env
+MARKUP_MULTIPLIER = float(os.getenv('MARKUP_MULTIPLIER', '2.8'))
+MAX_PRODUCTS_PER_RUN = int(os.getenv('MAX_PRODUCTS_PER_RUN', '10'))
+RUN_MODE = os.getenv('RUN_MODE', 'once')  # 'once' or 'scheduled'
+MAKRO_API_KEY = os.getenv('MAKRO_API_KEY', '')
+MAKRO_API_SECRET = os.getenv('MAKRO_API_SECRET', '')
+DRY_RUN = os.getenv('DRY_RUN', '1') == '1'
+
+
+class MakroApi:
+    """Minimal Makro API client (stubbed if credentials missing)."""
+    def __init__(self, api_key, api_secret):
         self.api_key = api_key
         self.api_secret = api_secret
-        self.seller_id = seller_id
-        self.base_url = MAKRO_BASE_URL
+        self.base_url = os.getenv('MAKRO_API_BASE', 'https://api.makromarketplace.co.za/rest/v2')
         self.session = requests.Session()
-        self.session.headers.update({
-            'Content-Type': 'application/json',
-            'api_key': self.api_key,
-            'api_secret': self.api_secret
-        })
+        if api_key and api_secret:
+            self.session.headers.update({
+                'X-Api-Key': api_key,
+                'X-Api-Secret': api_secret,
+                'Content-Type': 'application/json'
+            })
 
-    def get_fsn_from_category(self, category_name):
-        """Get FSN for a category"""
-        category_map = {
-            'Air Fryers': '3310',
+    def search_marketplace(self, title):
+        logger.info(f"MakroApi.search_marketplace (stub) for: {title}")
+        # Real implementation would call Makro search endpoints.
+        return []
+
+    def create_listing(self, payload):
+        """Create a listing on Makro. Returns dict with result or raises."""
+        if not self.api_key or not self.api_secret or DRY_RUN:
+            logger.info("DRY RUN: would create listing: %s", payload.get('title'))
+            return {'status': 'dry_run', 'id': None}
+        # Example POST (not live-tested)
+        url = f"{self.base_url}/products"
+        resp = self.session.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
+
+def fetch_takealot_search(query='Air Fryer', limit=10):
+    """Attempt to fetch simple product info from Takealot search page.
+    This is a best-effort scraper and may need tuning.
+    Returns list of {'title','price','url'}.
+    """
+    q = query.replace(' ', '+')
+    url = f"https://www.takealot.com/search?searchTerm={q}"
+    try:
+        r = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        r.raise_for_status()
+        text = r.text
+        products = []
+        # Very lightweight parsing: look for JSON-LD blocks or product-title markers
+        # Fallback: return empty list if parsing fails
+        # For reliability in Railway runs, allow TEST_PRODUCTS env var
+        test_products = os.getenv('TEST_PRODUCTS')
+        if test_products:
+            # Provide fake products for testing
+            for i in range(min(limit, 5)):
+                products.append({
+                    'title': f'Test Air Fryer {i+1}',
+                    'price': 499.99 + i * 50,
+                    'url': f'https://www.takealot.com/test-product-{i+1}'
+                })
+            return products
+
+        # Very naive extraction of titles and prices
+        import re
+        title_re = re.compile(r'"title"\s*:\s*"([^"]{10,200})"')
+        price_re = re.compile(r'"price"\s*:\s*"?([0-9,.]+)"?')
+        titles = title_re.findall(text)
+        prices = price_re.findall(text)
+        for t, p in zip(titles, prices):
+            try:
+                price = float(p.replace(',', '').replace('R', ''))
+            except:
+                continue
+            products.append({'title': t.strip(), 'price': price, 'url': url})
+            if len(products) >= limit:
+                break
+        return products
+    except Exception as e:
+        logger.warning('Failed to fetch Takealot search: %s', e)
+        return []
+
+
+def calculate_price(takealot_price):
+    return round(takealot_price * MARKUP_MULTIPLIER, 2)
+
+
+def process_products(makro_client):
+    logger.info('process_products() entered')
+    perf = {
+        'found': 0,
+        'created': 0,
+        'skipped': 0
+    }
+    products = fetch_takealot_search(limit=MAX_PRODUCTS_PER_RUN)
+    perf['found'] = len(products)
+    logger.info('Found %d products', perf['found'])
+
+    for p in products:
+        title = p.get('title')
+        price = p.get('price')
+        if not title or not price:
+            perf['skipped'] += 1
+            logger.warning('Skipping product with missing data: %s', p)
+            continue
+
+        makro_price = calculate_price(price)
+        # Check duplicates
+        existing = makro_client.search_marketplace(title)
+        if existing:
+            perf['skipped'] += 1
+            logger.info('Skipped (duplicate): %s', title)
+            continue
+
+        payload = {
+            'title': title,
+            'description': f'Imported from Takealot: {p.get("url")}',
+            'price': makro_price,
+            'status': 'INACTIVE'
         }
-        return category_map.get(category_name, '3310')
-
-    def check_duplicate(self, title, model_id=None):
-        """Check if listing already exists"""
         try:
-            url = f'{self.base_url}listings'
-            response = self.session.get(url)
-
-            if response.status_code == 200:
-                listings = response.json()
-                for listing in listings:
-                    if listing.get('title', '').lower() == title.lower():
-                        return True
-                    if model_id and listing.get('model_id', '').lower() == model_id.lower():
-                        return True
-            return False
+            res = makro_client.create_listing(payload)
+            perf['created'] += 1
+            logger.info('Created listing for %s (result=%s)', title, res.get('status'))
         except Exception as e:
-            print(f'Error checking duplicates: {e}')
-            return False
+            perf['skipped'] += 1
+            logger.error('Failed to create listing for %s: %s', title, e)
 
-    def create_listing(self, product_data):
-        """Create a new ACTIVE listing on Makro"""
-        try:
-            url = f'{self.base_url}listings'
+    logger.info('process_products() finished: %s', perf)
+    return perf
 
-            listing_payload = {
-                'fsn': product_data.get('fsn'),
-                'title': product_data.get('title'),
-                'description': product_data.get('description', product_data.get('title')),
-                'listing_status': 'ACTIVE',
-                'fulfilled_by': 'seller',
-                'mrp': product_data.get('mrp'),
-                'selling_price': product_data.get('selling_price'),
-                'stock': 100,
-                'sku': product_data.get('sku'),
-                'manufacturer_details': 'N/A',
-                'packer_details': 'N/A',
-                'hsn': product_data.get('hsn', ''),
-                'brand': product_data.get('brand', 'Generic'),
-            }
 
-            response = self.session.post(url, json=listing_payload)
+def job():
+    logger.info('Job started')
+    makro = MakroApi(MAKRO_API_KEY, MAKRO_API_SECRET)
+    try:
+        result = process_products(makro)
+        logger.info('Job result: %s', result)
+    except Exception as e:
+        logger.exception('Job failed: %s', e)
+    logger.info('Job finished')
 
-            if response.status_code in [200, 201]:
-                print(f'✓ Created ACTIVE listing: {product_data.get("title")}')
-                return response.json()
-            else:
-                print(f'✗ Failed to create listing: {response.status_code} - {response.text}')
-                return None
-        except Exception as e:
-            print(f'Error creating listing: {e}')
-            return None
 
-    def upload_images(self, listing_id, images):
-        """Upload images to Makro listing"""
-        try:
-            url = f'{self.base_url}listings/{listing_id}/images'
+def setup_schedule():
+    interval = int(os.getenv('SYNC_INTERVAL_MIN', '10'))
+    logger.info('Scheduling job every %d minutes', interval)
+    schedule.every(interval).minutes.do(job)
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
-            uploaded_count = 0
-            for idx, img in enumerate(images):
-                files = {
-                    'image': (img['filename'], img['content'], 'image/jpeg')
-                }
-                data = {
-                    'image_type': 'MAIN' if idx == 0 else 'ADDITIONAL'
-                }
 
-                response = self.session.post(url, files=files, data=data)
-
-                if response.status_code in [200, 201]:
-                    uploaded_count += 1
-                    print(f'  ✓ Uploaded image {idx + 1}/{len(images)}')
-                else:
-                    print(f'  ✗ Failed to upload image {idx + 1}')
-
-            return uploaded_count > 0
-        except Exception as e:
-            print(f'Error uploading images: {e}')
-            return False
-
-    def update_stock(self, listing_id, stock_quantity):
-        """Update stock quantity for a listing"""
-        try:
-            url = f'{self.base_url}listings/{listing_id}/inventory'
-            payload = {'stock': stock_quantity}
-
-            response = self.session.post(url, json=payload)
-            if response.status_code in [200, 201]:
-                return True
-            else:
-                print(f'Failed to update stock: {response.status_code}')
-                return False
-        except Exception as e:
-            print(f'Error updating stock: {e}')
-            return False
+if __name__ == '__main__':
+    mode = os.getenv('RUN_MODE', 'once')
+    logger.info('Starting main in mode=%s', mode)
+    if mode == 'scheduled':
+        setup_schedule()
+    else:
+        job()
+    logger.info('main.py exiting')
