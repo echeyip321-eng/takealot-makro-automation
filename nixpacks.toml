@@ -1,0 +1,8 @@
+[phases.setup]
+aptPkgs = ["libxml2-dev", "libxslt-dev", "gcc", "g++", "python3-dev"]
+
+[phases.install]
+cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
+
+[start]
+cmd = "python main.py"
