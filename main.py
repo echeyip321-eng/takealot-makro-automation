@@ -68,6 +68,68 @@ class ProfitCalculator:
     
     @staticmethod
     def calculate_margin(cost_price, selling_price):
+            """Calculate and validate profit margins with Makro fees included"""
+    
+    # Makro fee structure (from official documentation)
+    PLATFORM_FEE_MONTHLY = 230  # R230/month (prorated per product for calculation)
+    
+    # Commission fees by category (percentage of selling price)
+    COMMISSION_RATES = {
+        'default': 0.12,  # 12% default
+        'appliances': 0.10,
+        'electronics': 0.08,
+        'home_garden': 0.12,
+        'sports': 0.12,
+        'toys': 0.12,
+        'health_beauty': 0.10,
+        'books': 0.08,
+        'baby': 0.10
+    }
+    
+    # Transport fees based on weight (in grams) and distance
+    # Using average rates for calculation
+    @staticmethod
+    def estimate_transport_fee(weight_grams=1000):
+        """Estimate transport fee based on product weight"""
+        # Weight brackets (in grams) with average fees
+        if weight_grams <= 1000:
+            return 35  # Small: ~R35 average
+        elif weight_grams <= 15000:
+            return 50  # Medium: ~R50 average  
+        elif weight_grams <= 30000:
+            return 75  # Medium: ~R75 average
+        elif weight_grams <= 60000:
+            return 100  # Large: ~R100 average
+        elif weight_grams <= 150000:
+            return 135  # X-Large: ~R135 average
+        else:
+            return 200  # Bulky/Oversized: ~R200 average
+
+            @staticmethod
+    def calculate_makro_fees(selling_price, category='default', weight_grams=1000, monthly_sales=30):
+        """Calculate all Makro fees for a single product"""
+        # 1. Commission fee (percentage of selling price)
+        commission_rate = ProfitCalculator.COMMISSION_RATES.get(category, 0.12)
+        commission_fee = selling_price * commission_rate
+        
+        # 2. Transport fee (based on weight)
+        transport_fee = ProfitCalculator.estimate_transport_fee(weight_grams)
+        
+        # 3. Platform fee (prorated per product based on estimated monthly sales)
+        # If you sell 30 products/month, each product bears R230/30 = R7.67
+        platform_fee_per_product = ProfitCalculator.PLATFORM_FEE_MONTHLY / max(monthly_sales, 1)
+        
+        total_fees = commission_fee + transport_fee + platform_fee_per_product
+        
+        return {
+            'commission': commission_fee,
+            'transport': transport_fee,
+            'platform_prorated': platform_fee_per_product,
+            'total': total_fees,
+            'breakdown': f"Commission: R{commission_fee:.2f} + Transport: R{transport_fee:.2f} + Platform: R{platform_fee_per_product:.2f}"
+        }
+
+
         """Calculate profit margin percentage"""
         if cost_price <= 0:
             return 0
@@ -78,6 +140,24 @@ class ProfitCalculator:
         """Calculate optimal selling price with minimum margin"""
         # Takealot price includes their margin, treat as cost
         target_price = takealot_price * (1 + min_margin)
+                
+        # Calculate Makro fees to ensure we meet minimum profit AFTER fees
+        # We need to work backwards: final_profit = selling_price - cost - makro_fees
+        # Iterative approach to find optimal price that meets profit margin after fees
+        
+        attempt_price = target_price
+        for _ in range(10):  # Max 10 iterations to find optimal price
+            fees = ProfitCalculator.calculate_makro_fees(attempt_price)
+            net_profit = attempt_price - takealot_price - fees['total']
+            actual_margin = (net_profit / takealot_price) if takealot_price > 0 else 0
+            
+            if actual_margin >= min_margin:
+                target_price = attempt_price
+                break
+            
+            # Increase price to compensate for fees
+            attempt_price = takealot_price * (1 + min_margin) + fees['total']
+        
         
         # Apply charm pricing
         if target_price < 100:
