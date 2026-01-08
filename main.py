@@ -1,3 +1,210 @@
+import requests
+import time
+import os
+import re
+import schedule
+import json
+from datetime import datetime
+from bs4 import BeautifulSoup
+from io import BytesIO
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('automation.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Enhanced Configuration
+MIN_PROFIT_MARGIN = float(os.getenv('MIN_PROFIT_MARGIN', '0.15'))  # 15% minimum profit
+MAX_RETRY_ATTEMPTS = int(os.getenv('MAX_RETRY_ATTEMPTS', '3'))
+RETRY_DELAY = int(os.getenv('RETRY_DELAY', '5'))  # seconds
+RATE_LIMIT_DELAY = float(os.getenv('RATE_LIMIT_DELAY', '2'))  # seconds between requests
+
+# Webhook for notifications (optional)
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')  # For Slack/Discord notifications
+
+
+class NotificationService:
+    """Sends notifications for critical events"""
+    
+    @staticmethod
+    def send_webhook(message, level='info'):
+        """Send webhook notification"""
+        if not WEBHOOK_URL:
+            return
+            
+        try:
+            payload = {
+                'text': f"[{level.upper()}] {message}",
+                'timestamp': datetime.now().isoformat()
+            }
+            requests.post(WEBHOOK_URL, json=payload, timeout=5)
+        except:
+            pass
+    
+    @staticmethod
+    def notify_success(count, category):
+        """Notify successful listings"""
+        message = f"✅ Successfully listed {count} products in {category}"
+        logger.info(message)
+        NotificationService.send_webhook(message, 'success')
+    
+    @staticmethod
+    def notify_error(error_msg):
+        """Notify critical errors"""
+        message = f"🚨 Critical Error: {error_msg}"
+        logger.error(message)
+        NotificationService.send_webhook(message, 'error')
+
+
+class ProfitCalculator:
+    """Calculate and validate profit margins"""
+    
+    @staticmethod
+    def calculate_margin(cost_price, selling_price):
+        """Calculate profit margin percentage"""
+        if cost_price <= 0:
+            return 0
+        return ((selling_price - cost_price) / cost_price) * 100
+    
+    @staticmethod
+    def calculate_optimal_price(takealot_price, min_margin=MIN_PROFIT_MARGIN):
+        """Calculate optimal selling price with minimum margin"""
+        # Takealot price includes their margin, treat as cost
+        target_price = takealot_price * (1 + min_margin)
+        
+        # Apply charm pricing
+        if target_price < 100:
+            return round(target_price - 0.01, 2)
+        elif target_price < 1000:
+            # Round to .99
+            return int(target_price) + 0.99
+        else:
+            # Round to nearest 9.99
+            return (int(target_price / 10) * 10) + 9.99
+    
+    @staticmethod
+    def is_profitable(takealot_price, makro_price, min_margin=MIN_PROFIT_MARGIN):
+        """Check if listing meets minimum profit requirement"""
+        margin = ProfitCalculator.calculate_margin(takealot_price, makro_price)
+        return margin >= (min_margin * 100)
+
+
+class RetryHandler:
+    """Handle retries with exponential backoff"""
+    
+    @staticmethod
+    def retry_with_backoff(func, *args, max_attempts=MAX_RETRY_ATTEMPTS, **kwargs):
+        """Retry function with exponential backoff"""
+        for attempt in range(max_attempts):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                if attempt == max_attempts - 1:
+                    logger.error(f"Failed after {max_attempts} attempts: {str(e)}")
+                    raise
+                
+                wait_time = RETRY_DELAY * (2 ** attempt)
+                logger.warning(f"Attempt {attempt + 1} failed, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+
+
+class CompetitionMonitor:
+    """Monitor and analyze competition on Makro"""
+    
+    def __init__(self, makro_api):
+        self.makro = makro_api
+        self.competition_data = {}
+    
+    def check_existing_listings(self, product_title):
+        """Check if similar products exist and their prices"""
+        try:
+            # Search Makro for similar products
+            search_results = self.makro.search_marketplace(product_title)
+            
+            if search_results:
+                prices = [p.get('price', 0) for p in search_results]
+                return {
+                    'has_competition': True,
+                    'competitor_count': len(search_results),
+                    'lowest_price': min(prices) if prices else 0,
+                    'average_price': sum(prices) / len(prices) if prices else 0
+                }
+            
+            return {'has_competition': False}
+        except:
+            return {'has_competition': False}
+    
+    def adjust_price_for_competition(self, base_price, competition_data):
+        """Adjust price based on competition"""
+        if not competition_data.get('has_competition'):
+            return base_price
+        
+        lowest = competition_data.get('lowest_price', 0)
+        if lowest > 0:
+            # Price slightly below lowest competitor (2-5%)
+            competitive_price = lowest * 0.97
+            return max(competitive_price, base_price * 0.9)  # Don't go below 90% of base
+        
+        return base_price
+
+
+class PerformanceTracker:
+    """Track and log performance metrics"""
+    
+    def __init__(self):
+        self.metrics = {
+            'total_processed': 0,
+            'successful_listings': 0,
+            'failed_listings': 0,
+            'total_profit_potential': 0.0,
+            'categories_processed': set(),
+            'start_time': datetime.now()
+        }
+    
+    def log_success(self, product, profit_margin):
+        """Log successful listing"""
+        self.metrics['successful_listings'] += 1
+        self.metrics['total_processed'] += 1
+        self.metrics['total_profit_potential'] += profit_margin
+        logger.info(f"✓ Listed: {product['title'][:50]}... | Margin: {profit_margin:.1f}%")
+    
+    def log_failure(self, product, reason):
+        """Log failed listing"""
+        self.metrics['failed_listings'] += 1
+        self.metrics['total_processed'] += 1
+        logger.warning(f"✗ Skipped: {product.get('title', 'Unknown')[:50]}... | Reason: {reason}")
+    
+    def get_summary(self):
+        """Get performance summary"""
+        runtime = (datetime.now() - self.metrics['start_time']).total_seconds() / 60
+        
+        return {
+            'runtime_minutes': round(runtime, 2),
+            'success_rate': (self.metrics['successful_listings'] / max(self.metrics['total_processed'], 1)) * 100,
+            **self.metrics
+        }
+    
+    def print_summary(self):
+        """Print performance summary"""
+        summary = self.get_summary()
+        logger.info(f"\n{'='*50}")
+        logger.info(f"PERFORMANCE SUMMARY")
+        logger.info(f"{'='*50}")
+        logger.info(f"Runtime: {summary['runtime_minutes']:.1f} minutes")
+        logger.info(f"Total Processed: {summary['total_processed']}")
+        logger.info(f"Successful: {summary['successful_listings']}")
+        logger.info(f"Failed: {summary['failed_listings']}")
+        logger.info(f"Success Rate: {summary['success_rate']:.1f}%")
+        logger.info(f"Avg Profit Margin: {summary['total_profit_potential']:.1f}%")
+        logger.info(f"{'='*50}\n")
+
 
 
 class SATrendAnalyzer:
@@ -416,6 +623,7 @@ class AutomationEngine:
         self.takealot = TakealotScraper()
         self.makro = MakroAPI(MAKRO_API_KEY, MAKRO_API_SECRET, MAKRO_SELLER_ID)
         self.processed_plids = set()
+        
     
     def process_products(self):
         """Main automation logic with all add-on requirements"""
