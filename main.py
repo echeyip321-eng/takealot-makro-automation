@@ -84,9 +84,8 @@ def fetch_takealot_search(query='Air Fryer', limit=10):
         for attempt in range(max_retries):
             try:
                 time.sleep(1 + attempt * 0.5)  # Progressive delay
-                r = requests.get(url, timeout=15, headers=headers)    
-                                r.raise_for_status()
-                logger.info(f"Takealot request successful on attempt {attempt + 1}")
+                r = requests.get(url, timeout=15, headers=headers)
+                r.raise_for_status()                logger.info(f"Takealot request successful on attempt {attempt + 1}")
                 break  # Success, exit retry loop
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 403:
