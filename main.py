@@ -29,7 +29,7 @@ class MakroApi:
     def __init__(self, api_key, api_secret):
         self.api_key = api_key
         self.api_secret = api_secret
-        self.base_url = os.getenv('MAKRO_API_BASE', 'https://api.makromarketplace.co.za/rest/v2')
+        self.base_url = os.getenv('MAKRO_API_BASE', 'https://app-seller-pim.prod.de.metro-marketplace.cloud/openapi/v1')
         self.session = requests.Session()
         if api_key and api_secret:
             self.session.headers.update({
