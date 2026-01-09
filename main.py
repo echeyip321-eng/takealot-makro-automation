@@ -63,8 +63,49 @@ def fetch_takealot_search(query='Air Fryer', limit=10):
     q = query.replace(' ', '+')
     url = f"https://www.takealot.com/search?searchTerm={q}"
     try:
-        r = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-        r.raise_for_status()
+        # Comprehensive browser-like headers to bypass anti-scraping
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+            'Referer': 'https://www.takealot.com/',
+        }
+        
+        # Retry logic with exponential backoff
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                time.sleep(1 + attempt * 0.5)  # Progressive delay
+                r = requests.get(url, timeout=15, headers=headers)        r.raise_for_status()
+                                r.raise_for_status()
+                logger.info(f"Takealot request successful on attempt {attempt + 1}")
+                break  # Success, exit retry loop
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 403:
+                    logger.warning(f"403 Forbidden on attempt {attempt + 1}/{max_retries}")
+                    if attempt < max_retries - 1:
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                        continue
+                    else:
+                        logger.error("All retry attempts failed with 403 Forbidden")
+                        return []
+                else:
+                    raise
+            except Exception as e:
+                logger.warning(f"Request failed on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                else:
+                    raise
         text = r.text
         products = []
         # Very lightweight parsing: look for JSON-LD blocks or product-title markers
