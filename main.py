@@ -34,12 +34,8 @@ class MakroApi:
         self.access_token = None
         
         if api_key and api_secret:
-        try:
-                                    self.get_access_token()
-
-        except Exception as e:
-                    logger.warning(f'OAuth initialization failed: {e}')
-            
+            self.get_access_token()
+    
     def get_access_token(self):
         """Get OAuth2 bearer token using Basic Auth."""
         try:
@@ -64,10 +60,10 @@ class MakroApi:
                 })
                 logger.info('Successfully obtained OAuth access token')
             else:
-                logger.error('No access_token in response')
+                logger.warning('No access_token in response')
         except Exception as e:
-            logger.error(f'Failed to get access token: {e}')
-            logger.warning(f'Failed to get access token, continuing without OAuth: {e}')    
+            logger.warning(f'Failed to get access token, will use DRY_RUN mode: {e}')
+    
     def search_marketplace(self, title):
         """Search marketplace for existing product."""
         logger.info(f'MakroApi.search_marketplace stub for {title}')
@@ -75,13 +71,9 @@ class MakroApi:
     
     def create_listing(self, payload):
         """Create a listing on Makro."""
-        if not self.api_key or not self.api_secret or DRY_RUN:
+        if not self.api_key or not self.api_secret or DRY_RUN or not self.access_token:
             logger.info(f'DRY RUN: would create listing {payload.get("title")}')
             return {'status': 'dryrun', 'id': 'DRYRUN_ID'}
-        
-        if not self.access_token:
-            logger.error('No access token available')
-            return {'status': 'error', 'message': 'No access token'}
         
         try:
             resp = self.session.post(self.base_url, json=payload, timeout=15)
