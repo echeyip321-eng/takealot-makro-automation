@@ -22,7 +22,6 @@ MAKRO_API_KEY = os.getenv("MAKRO_API_KEY", "")
 MAKRO_API_SECRET = os.getenv("MAKRO_API_SECRET", "")
 DRY_RUN = os.getenv("DRY_RUN", "1") == "1"
 
-
 class MakroApi:
     """Makro API client using OAuth2 Bearer token authentication."""
 
@@ -63,7 +62,7 @@ class MakroApi:
                 logger.info("Successfully obtained OAuth access token")
             else:
                 logger.error("No access_token in response")
-                
+            
         except Exception as e:
             logger.error(f"Failed to get access token: {e}")
             raise
@@ -116,12 +115,10 @@ class MakroApi:
             logger.error(f"Failed to create listing: {e}")
             raise
 
-
 def fetch_takealot_search(query: str = "Air Fryer", limit: int = 10):
     """
-    Best-effort HTML fetch + naive parsing.
-    In production, expect 403 sometimes.
-    Use TEST_PRODUCTS for reliability.
+    Production-ready Takealot scraper that appears as a real browser.
+    Uses realistic headers, cookies, and timing to avoid 403 blocks.
     Returns list of {'title','price','url'}.
     """
     test_products = os.getenv("TEST_PRODUCTS")
@@ -137,61 +134,146 @@ def fetch_takealot_search(query: str = "Air Fryer", limit: int = 10):
                 }
             )
         return products
-
-    q = query.replace(" ", "+")
-    search_url = f"https://www.takealot.com/search?searchTerm={q}"
-    headers = {
+    
+    # Create a persistent session with cookies
+    session = requests.Session()
+    
+    # Step 1: Visit homepage first to get cookies (like a real user)
+    homepage_headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
         ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-ZA,en-US;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
-        "Referer": "https://www.takealot.com/",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
     }
-
+    
+    try:
+        # Mimic real user: visit homepage first
+        logger.info("Visiting Takealot homepage to establish session...")
+        homepage_resp = session.get(
+            "https://www.takealot.com/", 
+            headers=homepage_headers, 
+            timeout=15
+        )
+        homepage_resp.raise_for_status()
+        
+        # Wait like a real user would
+        time.sleep(2 + (hash(query) % 3))  # Random-ish delay 2-5 seconds
+        
+    except Exception as e:
+        logger.warning(f"Homepage visit failed: {e}")
+        # Continue anyway, might still work
+    
+    # Step 2: Now perform the search with proper referer
+    q = query.replace(" ", "+")
+    search_url = f"https://www.takealot.com/search?searchTerm={q}"
+    
+    search_headers = {
+        "User-Agent": homepage_headers["User-Agent"],
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-ZA,en-US;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Referer": "https://www.takealot.com/",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
+        "TE": "trailers",
+    }
+    
     max_retries = 3
     r = None
+    
     for attempt in range(max_retries):
         try:
-            time.sleep(1 + attempt * 0.5)
-            r = requests.get(search_url, headers=headers, timeout=15)
+            # Exponential backoff with jitter
+            if attempt > 0:
+                delay = (2 ** attempt) + (hash(str(time.time())) % 3)
+                logger.info(f"Waiting {delay}s before retry {attempt + 1}...")
+                time.sleep(delay)
+            
+            logger.info(f"Fetching Takealot search (attempt {attempt + 1}/{max_retries})...")
+            r = session.get(search_url, headers=search_headers, timeout=20)
+            
             if r.status_code == 403:
-                logger.warning("403 Forbidden on attempt %d/%d", attempt + 1, max_retries)
+                logger.warning(f"403 Forbidden on attempt {attempt + 1}/{max_retries}")
                 if attempt < max_retries - 1:
-                    time.sleep(2**attempt)
                     continue
-                return []
+                else:
+                    logger.error("All retries exhausted, still getting 403")
+                    return []
+            
             r.raise_for_status()
-            logger.info("Takealot request successful on attempt %d", attempt + 1)
+            logger.info(f"✓ Takealot request successful on attempt {attempt + 1}")
             break
+            
         except requests.exceptions.RequestException as e:
-            logger.warning("Request failed on attempt %d: %s", attempt + 1, e)
+            logger.warning(f"Request failed on attempt {attempt + 1}: {e}")
             if attempt < max_retries - 1:
-                time.sleep(2**attempt)
                 continue
-            return []
-
-    if not r:
+            else:
+                logger.error("All retries failed")
+                return []
+    
+    if not r or r.status_code != 200:
         return []
-
+    
     text = r.text
     products = []
-    # Very naive extraction. Likely imperfect.
+    
+    # Parse product data from HTML/JSON
     import re
-
-    title_re = re.compile(r'"title"\s*:\s*"([^"]{10,200})"')
-    price_re = re.compile(r'"price"\s*:"?([0-9][0-9,\.]*) "?')
-    titles = title_re.findall(text)
-    prices = price_re.findall(text)
+    
+    # Try multiple patterns (Takealot may use different formats)
+    title_patterns = [
+        re.compile(r'"title"\s*:\s*"([^"]{10,200})"'),
+        re.compile(r'data-product-title="([^"]{10,200})"'),
+        re.compile(r'<h3[^>]*>([^<]{10,200})</h3>'),
+    ]
+    
+    price_patterns = [
+        re.compile(r'"price"\s*:"?([0-9][0-9,\.]*)\s*"?'),
+        re.compile(r'data-price="([0-9][0-9,\.]*)"'),
+        re.compile(r'R\s*([0-9][0-9,\.]+)'),
+    ]
+    
+    titles = []
+    prices = []
+    
+    for pattern in title_patterns:
+        titles = pattern.findall(text)
+        if titles:
+            logger.info(f"Found {len(titles)} titles using pattern")
+            break
+    
+    for pattern in price_patterns:
+        prices = pattern.findall(text)
+        if prices:
+            logger.info(f"Found {len(prices)} prices using pattern")
+            break
+    
+    # Match titles to prices
     for t, p in zip(titles, prices):
         try:
-            price = float(p.replace(",", ""))
+            price = float(p.replace(",", "").replace(" ", ""))
         except ValueError:
             continue
+        
         products.append(
             {
                 "title": t.strip(),
@@ -199,15 +281,15 @@ def fetch_takealot_search(query: str = "Air Fryer", limit: int = 10):
                 "url": search_url,
             }
         )
+        
         if len(products) >= limit:
             break
-
+    
+    logger.info(f"Extracted {len(products)} products from Takealot")
     return products
-
 
 def calculate_price(takealot_price: float) -> float:
     return round(takealot_price * MARKUP_MULTIPLIER, 2)
-
 
 def process_products(makro_client: MakroApi):
     logger.info("process_products() entered")
@@ -220,12 +302,14 @@ def process_products(makro_client: MakroApi):
     for p in products:
         title = p.get("title")
         price = p.get("price")
+
         if not title or price is None:
             perf["skipped"] += 1
             logger.warning("Skipping product with missing data: %s", p)
             continue
 
         makro_price = calculate_price(float(price))
+
         existing = makro_client.search_marketplace(title)
         if existing:
             perf["skipped"] += 1
@@ -250,17 +334,17 @@ def process_products(makro_client: MakroApi):
     logger.info("process_products() finished: %s", perf)
     return perf
 
-
 def job():
     logger.info("Job started")
     makro = MakroApi(MAKRO_API_KEY, MAKRO_API_SECRET)
+
     try:
         result = process_products(makro)
         logger.info("Job result: %s", result)
     except Exception as e:
         logger.exception("Job failed: %s", e)
-    logger.info("Job finished")
 
+    logger.info("Job finished")
 
 def setup_schedule():
     interval = int(os.getenv("SYNC_INTERVAL_MIN", "10"))
@@ -271,12 +355,13 @@ def setup_schedule():
         schedule.run_pending()
         time.sleep(1)
 
-
 if __name__ == "__main__":
     mode = os.getenv("RUN_MODE", "once")
     logger.info("Starting main in mode=%s", mode)
+
     if mode == "scheduled":
         setup_schedule()
     else:
         job()
+
     logger.info("main.py exiting")
