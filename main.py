@@ -34,8 +34,12 @@ class MakroApi:
         self.access_token = None
         
         if api_key and api_secret:
-            self.get_access_token()
-    
+try:
+                        self.get_access_token()
+
+        except Exception as e:
+            logger.warning(f'OAuth initialization failed: {e}')
+
     def get_access_token(self):
         """Get OAuth2 bearer token using Basic Auth."""
         try:
@@ -63,8 +67,7 @@ class MakroApi:
                 logger.error('No access_token in response')
         except Exception as e:
             logger.error(f'Failed to get access token: {e}')
-            raise
-    
+            logger.warning(f'Failed to get access token, continuing without OAuth: {e}')    
     def search_marketplace(self, title):
         """Search marketplace for existing product."""
         logger.info(f'MakroApi.search_marketplace stub for {title}')
