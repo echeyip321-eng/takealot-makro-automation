@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import requests
+import base64
 from datetime import datetime
 import schedule
 
@@ -23,24 +24,49 @@ DRY_RUN = os.getenv("DRY_RUN", "1") == "1"
 
 
 class MakroApi:
-    """Minimal Makro API client (stubbed if credentials missing)."""
+    """Makro API client using OAuth2 Bearer token authentication."""
 
     def __init__(self, api_key, api_secret):
         self.api_key = api_key
         self.api_secret = api_secret
-        self.base_url = os.getenv(
-            "MAKRO_API_BASE",
-            "https://app-seller-pim.prod.de.metro-marketplace.cloud/openapi/v1",
-        )
+        self.oauth_url = "https://seller.makro.co.za/api/oauth-service/oauth/token?grant_type=client_credentials&scope=Seller_Api"
+        self.base_url = "https://seller.makro.co.za/api/listings/v5/"
         self.session = requests.Session()
+        self.access_token = None
+        
         if api_key and api_secret:
-            self.session.headers.update(
-                {
-                    "X-Api-Key": api_key,
-                    "X-Api-Secret": api_secret,
-                    "Content-Type": "application/json",
-                }
-            )
+            self._get_access_token()
+
+    def _get_access_token(self):
+        """Get OAuth2 bearer token using Basic Auth."""
+        try:
+            # Create Basic Auth header
+            credentials = f"{self.api_key}:{self.api_secret}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+            
+            headers = {
+                "Authorization": f"Basic {encoded_credentials}",
+                "Content-Type": "application/json"
+            }
+            
+            resp = requests.get(self.oauth_url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            
+            token_data = resp.json()
+            self.access_token = token_data.get("access_token")
+            
+            if self.access_token:
+                self.session.headers.update({
+                    "Authorization": f"Bearer {self.access_token}",
+                    "Content-Type": "application/json"
+                })
+                logger.info("Successfully obtained OAuth access token")
+            else:
+                logger.error("No access_token in response")
+                
+        except Exception as e:
+            logger.error(f"Failed to get access token: {e}")
+            raise
 
     def search_marketplace(self, title: str):
         logger.info(f"MakroApi.search_marketplace (stub) for: {title}")
@@ -52,17 +78,50 @@ class MakroApi:
         if not self.api_key or not self.api_secret or DRY_RUN:
             logger.info("DRY RUN: would create listing: %s", payload.get("title"))
             return {"status": "dry_run", "id": None}
-
-        url = f"{self.base_url}/products"
-        resp = self.session.post(url, json=payload, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
+        
+        if not self.access_token:
+            logger.error("No access token available")
+            return {"status": "error", "message": "No access token"}
+        
+        # Format payload according to Makro API spec
+        makro_payload = {
+            "listing_records": [
+                {
+                    "product_id": "TEST_PRODUCT_ID",  # This needs to be a real FSN ID
+                    "listing_status": "INACTIVE",
+                    "sku_id": f"SKU_{int(time.time())}",
+                    "selling_region_pref": "Local",
+                    "min_oq": 1,
+                    "max_oq": 100,
+                    "price": {
+                        "base_price": payload.get("price", 0),
+                        "selling_price": payload.get("price", 0),
+                        "currency": "ZAR"
+                    },
+                    "fulfillment_profile": "NON_FBM",
+                    "fulfillment": {
+                        "dispatch_sla": 4,
+                        "shipping_provider": "SELLER",
+                        "procurement_type": "REGULAR"
+                    }
+                }
+            ]
+        }
+        
+        try:
+            resp = self.session.post(self.base_url, json=makro_payload, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.error(f"Failed to create listing: {e}")
+            raise
 
 
 def fetch_takealot_search(query: str = "Air Fryer", limit: int = 10):
     """
     Best-effort HTML fetch + naive parsing.
-    In production, expect 403 sometimes. Use TEST_PRODUCTS for reliability.
+    In production, expect 403 sometimes.
+    Use TEST_PRODUCTS for reliability.
     Returns list of {'title','price','url'}.
     """
     test_products = os.getenv("TEST_PRODUCTS")
@@ -81,7 +140,6 @@ def fetch_takealot_search(query: str = "Air Fryer", limit: int = 10):
 
     q = query.replace(" ", "+")
     search_url = f"https://www.takealot.com/search?searchTerm={q}"
-
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -89,7 +147,6 @@ def fetch_takealot_search(query: str = "Air Fryer", limit: int = 10):
         ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        # Avoid 'br' unless you're sure brotli decoding deps exist
         "Accept-Encoding": "gzip, deflate",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
@@ -98,7 +155,6 @@ def fetch_takealot_search(query: str = "Air Fryer", limit: int = 10):
 
     max_retries = 3
     r = None
-
     for attempt in range(max_retries):
         try:
             time.sleep(1 + attempt * 0.5)
@@ -106,7 +162,7 @@ def fetch_takealot_search(query: str = "Air Fryer", limit: int = 10):
             if r.status_code == 403:
                 logger.warning("403 Forbidden on attempt %d/%d", attempt + 1, max_retries)
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                     continue
                 return []
             r.raise_for_status()
@@ -115,7 +171,7 @@ def fetch_takealot_search(query: str = "Air Fryer", limit: int = 10):
         except requests.exceptions.RequestException as e:
             logger.warning("Request failed on attempt %d: %s", attempt + 1, e)
             if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
                 continue
             return []
 
@@ -124,22 +180,18 @@ def fetch_takealot_search(query: str = "Air Fryer", limit: int = 10):
 
     text = r.text
     products = []
-
     # Very naive extraction. Likely imperfect.
     import re
 
     title_re = re.compile(r'"title"\s*:\s*"([^"]{10,200})"')
-    price_re = re.compile(r'"price"\s*:\s*"?([0-9][0-9,\.]*) "?')
-
+    price_re = re.compile(r'"price"\s*:"?([0-9][0-9,\.]*) "?')
     titles = title_re.findall(text)
     prices = price_re.findall(text)
-
     for t, p in zip(titles, prices):
         try:
             price = float(p.replace(",", ""))
         except ValueError:
             continue
-
         products.append(
             {
                 "title": t.strip(),
@@ -168,14 +220,12 @@ def process_products(makro_client: MakroApi):
     for p in products:
         title = p.get("title")
         price = p.get("price")
-
         if not title or price is None:
             perf["skipped"] += 1
             logger.warning("Skipping product with missing data: %s", p)
             continue
 
         makro_price = calculate_price(float(price))
-
         existing = makro_client.search_marketplace(title)
         if existing:
             perf["skipped"] += 1
