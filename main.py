@@ -34,12 +34,12 @@ class MakroApi:
         self.access_token = None
         
         if api_key and api_secret:
-try:
-                        self.get_access_token()
+        try:
+                                    self.get_access_token()
 
         except Exception as e:
-            logger.warning(f'OAuth initialization failed: {e}')
-
+                    logger.warning(f'OAuth initialization failed: {e}')
+            
     def get_access_token(self):
         """Get OAuth2 bearer token using Basic Auth."""
         try:
