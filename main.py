@@ -187,12 +187,13 @@ def fetch_takealot_search(query='Air Fryer', limit=10):
     title_patterns = [
         re.compile(r'<title[^>]*>(.{10,200})</title>'),
                 re.compile(r'data-product-title[^>]*>(.{10,200})<'),
-                re.compile(r'<h3[^>]*>(.{10,200})</h3>'
+                re.compile(r'<h3[^>]*>(.{10,200})</h3>'),
     ]
     
     price_patterns = [
         re.compile(r'[Rr]\s?\d{1,4}[.,]?\d{0,2}'),
         re.compile(r'"price":\s*([\d,.]+)'),
+                re.compile(r'[Rr]\d{1,4}(?:[.,]\d{2})?')
         
     ]
     
