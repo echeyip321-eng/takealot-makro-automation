@@ -270,7 +270,7 @@ def activate_mode(makro_api, review_queue, takealot_scrap, fsn_finderer):
         
         if DRY_RUN:
             logger.info(f"  [DRY RUN] Would create listing: {json.dumps(payload, indent=2)}")
-        else:
+            else:
             try:
                 result = makro_api.create_listing(payload)
                 listing_id = result.get('listing_id')
