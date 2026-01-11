@@ -34,50 +34,47 @@ class MakroApi:
     def __init__(self, apikey, apisecret):
         self.apikey = apikey
         self.apisecret = apisecret
-        self.oauth_url = "https://seller.makro.co.za/api/oauth-service/oauth/token?granttype=clientcredentials"
         self.baseurl = "https://seller.makro.co.za/api/listings/v5"
         self.session = requests.Session()
-        self.access_token = None
+
+        def _generate_signature(self, method: str, path: str, timestamp: str, body: str = '') -> str:
+        """Generate HMAC-SHA256 signature for Makro API."""
+        # Create signature string: METHOD\nPATH\nTIMESTAMP\nBODY
+        signature_string = f"{method}\n{path}\n{timestamp}\n{body}"
         
-        if apikey and apisecret:
-            self.get_access_token()
+        # Generate HMAC-SHA256 signature
+        signature = hmac.new(
+            self.apisecret.encode('utf-8'),
+            signature_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        
+        return signature
     
-    def get_access_token(self):
-        """Get OAuth2 bearer token using Basic Auth."""
-        try:
-            credentials = f"{self.apikey}:{self.apisecret}"
-            encoded_credentials = base64.b64encode(credentials.encode()).decode()
-            headers = {
-                'Authorization': f'Basic {encoded_credentials}',
-                'Content-Type': 'application/json'
-            }
-            resp = requests.get(self.oauth_url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            token_data = resp.json()
-            self.access_token = token_data.get('access_token')
-            
-            if self.access_token:
-                self.session.headers.update({
-                    'Authorization': f'Bearer {self.access_token}',
-                    'Content-Type': 'application/json'
-                })
-                logger.info("Successfully obtained OAuth access token")
-            else:
-                logger.error("No access_token in response")
-        except Exception as e:
-            logger.error(f"Failed to get access token: {e}")
-            if not DRY_RUN:
-                raise
-    
+    def _make_request(self, method: str, endpoint: str, json_data: dict = None) -> dict:
+        """Make authenticated request to Makro API using HMAC signature."""
+        timestamp = str(int(time.time() * 1000))
+        path = endpoint.replace(self.baseurl, '')
+        body = json.dumps(json_data) if json_data else ''
+        
+        signature = self._generate_signature(method, path, timestamp, body)
+        
+        headers = {
+            'X-API-Key': self.apikey,
+            'X-Signature': signature,
+            'X-Timestamp': timestamp,
+            'Content-Type': 'application/json'
+        }
+        
+        url = f"{self.baseurl}{path}"
+        resp = self.session.request(method, url, json=json_data, headers=headers, timeout=15)
+        return resp
+        
     def create_listing(self, payload: dict) -> dict:
         """Create a listing on Makro."""
         if not self.apikey or not self.apisecret or DRY_RUN:
             logger.info(f"DRY RUN: would create listing '{payload.get('title')}'")
             return {'status': 'dryrun', 'id': 'DRYRUN_ID'}
-        
-        if not self.access_token:
-            logger.error("No access token available")
-            return {'status': 'error', 'message': 'No access token'}
         
         makro_payload = {
             "listing_records": [{
@@ -102,12 +99,11 @@ class MakroApi:
         }
         
         try:
-            resp = self.session.post(self.baseurl, json=makro_payload, timeout=15)
-            resp.raise_for_status()
+            resp = self._make_request('POST', '', makro_payload)            return {'status': 'error', 'message': str(e)}
+
+                    resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            logger.error(f"Failed to create listing: {e}")
-            return {'status': 'error', 'message': str(e)}
     
     def update_listing_status(self, listing_id: str, status: str) -> dict:
         """Update a listing status (e.g., INACTIVE to ACTIVE)."""
