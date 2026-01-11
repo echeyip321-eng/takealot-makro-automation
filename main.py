@@ -219,13 +219,13 @@ def ingest_mode(makro_api, takealot_scraper):
     # 3. Filter by MIN_MARGIN_THRESHOLD
     # 4. Write to Google Sheet with Status='Pending Review'
 
-def activate_mode(makro_api, review_queue, takealot_scrap, fsn_finderer):
     """Process approved items from Google Sheet and create Makro listings"""
     logger.info("=== ACTIVATE MODE ===")
     
-    approved_items = review_queue.get_approved_items()
-    
+def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):    
     if not approved_items:
+            approved_items = review_queue.get_approved_items()
+            
         logger.info("No approved items to process")
         return
     
