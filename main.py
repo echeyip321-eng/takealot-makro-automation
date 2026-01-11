@@ -42,33 +42,33 @@ class MakroApi:
         # Create signature string: METHOD\nPATH\nTIMESTAMP\nBODY
         signature_string = f"{method}\n{path}\n{timestamp}\n{body}"
         
-        # Generate HMAC-SHA256 signature
-        signature = hmac.new(
-            self.apisecret.encode('utf-8'),
+                # Generate HMAC-SHA256 signature
+                signature = hmac.new(
+                    self.apisecret.encode('utf-8'),
             signature_string.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-        
-        return signature
-    
+                    hashlib.sha256
+                    ).hexdigest()
+                    
+                    return signature
+            
     def _make_request(self, method: str, endpoint: str, json_data: dict = None) -> dict:
-        """Make authenticated request to Makro API using HMAC signature."""
-        timestamp = str(int(time.time() * 1000))
-        path = endpoint.replace(self.baseurl, '')
-        body = json.dumps(json_data) if json_data else ''
+                """Make authenticated request to Makro API using HMAC signature."""
+                timestamp = str(int(time.time() * 1000))
+                path = endpoint.replace(self.baseurl, '')
+                body = json.dumps(json_data) if json_data else ''
         
-        signature = self._generate_signature(method, path, timestamp, body)
+                signature = self._generate_signature(method, path, timestamp, body)
         
-        headers = {
-            'X-API-Key': self.apikey,
-            'X-Signature': signature,
-            'X-Timestamp': timestamp,
-            'Content-Type': 'application/json'
-        }
+                headers = {
+                        'X-API-Key': self.apikey,
+                        'X-Signature': signature,
+                        'X-Timestamp': timestamp,
+                        'Content-Type': 'application/json'
+                }
         
-        url = f"{self.baseurl}{path}"
-        resp = self.session.request(method, url, json=json_data, headers=headers, timeout=15)
-        return resp
+                url = f"{self.baseurl}{path}"
+                        resp = self.session.request(method, url, json=json_data, headers=headers, timeout=15)
+                return resp
         
     def create_listing(self, payload: dict) -> dict:
         """Create a listing on Makro."""
@@ -99,12 +99,13 @@ class MakroApi:
         }
         
         try:
-            resp = self._make_request('POST', '', makro_payload)            return {'status': 'error', 'message': str(e)}
+            resp = self._make_request('POST', '', makro_payload)   
 
                     resp.raise_for_status()
             return resp.json()
-        except Exception as e:
-    
+                    except Exception as e:
+            logger.error(f"Failed to create listing: {e}")
+            return {'status': 'error', 'message': str(e)}
     def update_listing_status(self, listing_id: str, status: str) -> dict:
         """Update a listing status (e.g., INACTIVE to ACTIVE)."""
         if DRY_RUN:
