@@ -5,6 +5,8 @@ import requests
 import base64
 from datetime import datetime
 import json
+import hmac
+import hashlib
 
 # Logging setup
 logging.basicConfig(
