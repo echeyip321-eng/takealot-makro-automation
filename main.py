@@ -33,7 +33,7 @@ class MakroApi:
     def __init__(self, apikey, apisecret):
         self.apikey = apikey
         self.apisecret = apisecret
-        self.base_url = 'https://app-seller-pim.prod.de.metro-marketplace.cloud/openapi/v1'
+        self.base_url = 'https://app-seller-inventory.prod.de.metro-marketplace.cloud/openapi/v2'
         self.session = requests.Session()
         
     def _sign_request(self, method, uri, body, timestamp):
@@ -68,7 +68,7 @@ class MakroApi:
         return resp.json() if resp.text else {}
     
     def get_products(self, limit=100, offset=0):
-        return self._request('GET', f'/products?limit={limit}&offset={offset}')
+        return self._request('GET', f'/offers?limit={limit}&offset={offset}')
     
     def search_marketplace(self, title):
         try:
@@ -82,10 +82,10 @@ class MakroApi:
             return None
     
     def create_listing(self, payload):
-        return self._request('POST', '/products', json_body=payload)
+        return self._request('POST', '/offers', json_body=payload)
     
     def update_listing(self, product_id, payload):
-        return self._request('PATCH', f'/products/{product_id}', json_body=payload)
+        return self._request('PATCH', f'/offers/{product_id}', json_body=payload)
 
 class ReviewQueue:
     def __init__(self, csv_url):
