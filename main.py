@@ -9,7 +9,7 @@ import random
 import hmac
 import hashlib
 import json
-
+from bs4 import BeautifulSoup
 
 # Logging setup
 logging.basicConfig(
@@ -19,7 +19,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 user_agents = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -28,7 +27,6 @@ user_agents = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0'
 ]
 
-
 # Configuration from env
 MARKUP_MULTIPLIER = float(os.getenv('MARKUP_MULTIPLIER', '2.8'))
 MAX_PRODUCTS_PER_RUN = int(os.getenv('MAX_PRODUCTS_PER_RUN', '10'))
@@ -36,7 +34,6 @@ RUN_MODE = os.getenv('RUN_MODE', 'once')  # once or scheduled
 MAKRO_API_KEY = os.getenv('MAKRO_API_KEY', '')
 MAKRO_API_SECRET = os.getenv('MAKRO_API_SECRET', '')
 DRY_RUN = os.getenv('DRY_RUN', '1') == '1'
-
 
 class MakroApi:
     """Makro API client using HMAC signing authentication."""
@@ -82,9 +79,8 @@ class MakroApi:
             logger.error(f'Failed to create listing: {e}')
             return {'status': 'error', 'message': str(e)}
 
-
 def fetch_takealot_search(query='Air Fryer', limit=10):
-    """Production-ready Takealot scraper with anti-bot detection."""
+    """Production-ready Takealot scraper with BeautifulSoup and anti-bot detection."""
     
     # Test mode
     test_products = os.getenv('TEST_PRODUCTS')
@@ -179,62 +175,69 @@ def fetch_takealot_search(query='Air Fryer', limit=10):
     if not r or r.status_code != 200:
         return []
     
-    # Parse products from HTML
-    text = r.text
+    # Parse products using BeautifulSoup
+    soup = BeautifulSoup(r.text, 'html.parser')
     products = []
-    import re
     
-    title_patterns = [
-        re.compile(r'<title[^>]*>(.{10,200})</title>'),
-                re.compile(r'data-product-title[^>]*>(.{10,200})<'),
-                re.compile(r'<h3[^>]*>(.{10,200})</h3>'),
-    ]
+    # Try to find product containers - Takealot uses various selectors
+    product_containers = (
+        soup.find_all('article', class_='product-card') or
+        soup.find_all('div', class_='product-card') or
+        soup.find_all('div', attrs={'data-ref': 'product-item'}) or
+        soup.find_all('div', class_='grid-item')
+    )
     
-    price_patterns = [
-        re.compile(r'[Rr]\s?\d{1,4}[.,]?\d{0,2}'),
-        re.compile(r'"price":\s*([\d,.]+)'),
-                re.compile(r'[Rr]\d{1,4}(?:[.,]\d{2})?')
-        
-    ]
+    logger.info(f'Found {len(product_containers)} product containers')
     
-    titles = []
-    prices = []
-    
-    for pattern in title_patterns:
-        titles = pattern.findall(text)
-        if titles:
-            logger.info(f'Found {len(titles)} titles using pattern')
-            break
-    
-    for pattern in price_patterns:
-        prices = pattern.findall(text)
-        if prices:
-            logger.info(f'Found {len(prices)} prices using pattern')
-            break
-    
-    # Match titles to prices
-    for t, p in zip(titles, prices):
+    for container in product_containers[:limit]:
         try:
-            price = float(p.replace('R', '').replace(',', '.').replace(' ', ''))
-            products.append({
-                'title': t.strip(),
-                'price': price,
-                'url': search_url
-            })
-        except ValueError:
+            # Extract title
+            title_elem = (
+                container.find('h3') or
+                container.find('h4') or
+                container.find('a', class_='title') or
+                container.find('div', class_='title')
+            )
+            title = title_elem.get_text(strip=True) if title_elem else None
+            
+            # Extract price
+            price_elem = (
+                container.find('span', class_='currency') or
+                container.find('div', class_='price') or
+                container.find('span', attrs={'data-ref': 'product-price'})
+            )
+            price_text = price_elem.get_text(strip=True) if price_elem else None
+            
+            # Extract URL
+            link_elem = container.find('a', href=True)
+            url = link_elem['href'] if link_elem else None
+            if url and not url.startswith('http'):
+                url = 'https://www.takealot.com' + url
+            
+            # Parse price
+            if title and price_text:
+                # Remove R, spaces, commas
+                price_clean = price_text.replace('R', '').replace(' ', '').replace(',', '')
+                try:
+                    price = float(price_clean)
+                    products.append({
+                        'title': title,
+                        'price': price,
+                        'url': url or search_url
+                    })
+                except ValueError:
+                    logger.warning(f'Could not parse price: {price_text}')
+                    continue
+        except Exception as e:
+            logger.warning(f'Error parsing product container: {e}')
             continue
-    
-    if len(products) > limit:
-        products = products[:limit]
     
     logger.info(f'Extracted {len(products)} products from Takealot')
     return products
 
-
 def calculate_price(takealot_price):
     """Calculate Makro listing price based on Takealot."""
     return round(takealot_price * MARKUP_MULTIPLIER, 2)
-
 
 def process_products(makro_client):
     """Process products from Takealot and create Makro listings."""
@@ -274,7 +277,6 @@ def process_products(makro_client):
     logger.info(f'process_products finished: {perf}')
     return perf
 
-
 def job():
     logger.info('Job started')
     makro = MakroApi(MAKRO_API_KEY, MAKRO_API_SECRET)
@@ -285,7 +287,6 @@ def job():
         logger.exception(f'Job failed: {e}')
     logger.info('Job finished')
 
-
 def setup_schedule():
     interval = int(os.getenv('SYNC_INTERVAL_MIN', '10'))
     logger.info(f'Scheduling job every {interval} minutes')
@@ -293,7 +294,6 @@ def setup_schedule():
     while True:
         schedule.run_pending()
         time.sleep(1)
-
 
 if __name__ == '__main__':
     mode = os.getenv('RUN_MODE', 'once')
