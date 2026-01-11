@@ -10,6 +10,7 @@ import hmac
 import hashlib
 import json
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 # Logging setup
 logging.basicConfig(
@@ -35,7 +36,8 @@ MAKRO_API_KEY = os.getenv('MAKRO_API_KEY', '')
 MAKRO_API_SECRET = os.getenv('MAKRO_API_SECRET', '')
 DRY_RUN = os.getenv('DRY_RUN', '1') == '1'
 
-class MakroApi:
+183
+:
     """Makro API client using HMAC signing authentication."""
     
     def __init__(self, api_key, api_secret):
@@ -83,6 +85,10 @@ def fetch_takealot_search(query='Air Fryer', limit=10):
     """Production-ready Takealot scraper with BeautifulSoup and anti-bot detection."""
     
     # Test mode
+    def fetch_takealot_search(query='Air Fryer', limit=10):
+    """Production-ready Takealot scraper with Playwright browser automation."""
+    
+    # Test mode
     test_products = os.getenv('TEST_PRODUCTS')
     if test_products:
         products = []
@@ -94,6 +100,87 @@ def fetch_takealot_search(query='Air Fryer', limit=10):
             })
         return products
     
+    products = []
+    
+    try:
+        logger.info(f'Starting browser automation for query: {query}')
+        
+        with sync_playwright() as p:
+            # Launch browser with stealth settings
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-web-security'
+                ]
+            )
+            
+            context = browser.new_context(
+                user_agent=random.choice(user_agents),
+                viewport={'width': 1920, 'height': 1080},
+                locale='en-ZA',
+                timezone_id='Africa/Johannesburg'
+            )
+            
+            page = context.new_page()
+            
+            # Add stealth JS to avoid detection
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.chrome = {runtime: {}};
+            """)
+            
+            # Visit homepage first
+            logger.info('Visiting Takealot homepage...')
+            page.goto('https://www.takealot.com', wait_until='networkidle', timeout=30000)
+            page.wait_for_timeout(random.randint(2000, 4000))
+            
+            # Perform search
+            logger.info(f'Searching for: {query}')
+            search_url = f'https://www.takealot.com/search?searchTerm={query}'
+            page.goto(search_url, wait_until='networkidle', timeout=30000)
+            page.wait_for_timeout(random.randint(2000, 3000))
+            
+            # Wait for product grid to load
+            page.wait_for_selector('.product-card', timeout=15000)
+            
+            # Extract product data
+            product_elements = page.query_selector_all('.product-card')[:limit]
+            logger.info(f'Found {len(product_elements)} products')
+            
+            for elem in product_elements:
+                try:
+                    title_elem = elem.query_selector('.product-title')
+                    price_elem = elem.query_selector('.currency-module_currency')
+                    link_elem = elem.query_selector('a')
+                    
+                    if title_elem and price_elem and link_elem:
+                        title = title_elem.inner_text().strip()
+                        price_text = price_elem.inner_text().strip().replace('R', '').replace(',', '').strip()
+                        price = float(price_text)
+                        url = 'https://www.takealot.com' + link_elem.get_attribute('href')
+                        
+                        products.append({
+                            'title': title,
+                            'price': price,
+                            'url': url
+                        })
+                        logger.info(f'Extracted: {title} - R{price}')
+                except Exception as e:
+                    logger.warning(f'Failed to extract product: {e}')
+                    continue
+            
+            browser.close()
+        
+        logger.info(f'Successfully extracted {len(products)} products')
+        return products
+        
+    except Exception as e:
+        logger.error(f'Browser automation failed: {e}')
+        return []
     # Create persistent session
     session = requests.Session()
     user_agent = random.choice(user_agents)
@@ -223,7 +310,8 @@ def fetch_takealot_search(query='Air Fryer', limit=10):
                     products.append({
                         'title': title,
                         'price': price,
-                        'url': url or search_url
+                        'url': url or search_ur184
+                        l
                     })
                 except ValueError:
                     logger.warning(f'Could not parse price: {price_text}')
