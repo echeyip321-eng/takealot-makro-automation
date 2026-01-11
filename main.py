@@ -52,7 +52,7 @@ class MakroApi:
         if json_body:
             body = json.dumps(json_body, separators=(',', ':'))
         
-        signature = self._sign_request(method.upper(), uri, body, timestamp)
+        signature = self._sign_request(method.upper(), endpoint, body, timestamp)
         
         headers = {
             'Accept': 'application/json',
