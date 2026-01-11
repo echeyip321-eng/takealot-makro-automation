@@ -246,8 +246,8 @@ def activate_mode(makro_api, review_queue, takealot_scrap, fsn_finderer):
                 item['fsn'] = found_fsn
                 logger.info(f"  ✅ Auto-found FSN: {found_fsn}")
             else:
-            logger.warning("  ⚠️ No FSN provided - skipping")
-            continue
+                        logger.warning("  ⚠️ No FSN provided - skipping")
+                        continue
         
         # Check if already listed
         try:
