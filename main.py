@@ -27,49 +27,48 @@ DRY_RUN = os.getenv('DRY_RUN', '1') == '1'
 GOOGLE_SHEETS_URL = os.getenv('GOOGLE_SHEETS_URL', '')  # CSV export URL from Google Sheets
 MODE = os.getenv('MODE', 'ingest')  # 'ingest' or 'activate'
 
-
 class MakroApi:
-    """Makro API client using OAuth2 Bearer token authentication."""
+    """Makro API client using HMAC-SHA256 signature authentication."""
     
     def __init__(self, apikey, apisecret):
         self.apikey = apikey
         self.apisecret = apisecret
         self.baseurl = "https://seller.makro.co.za/api/listings/v5"
         self.session = requests.Session()
-
-        def _generate_signature(self, method: str, path: str, timestamp: str, body: str = '') -> str:
+    
+    def _generate_signature(self, method: str, path: str, timestamp: str, body: str = '') -> str:
         """Generate HMAC-SHA256 signature for Makro API."""
         # Create signature string: METHOD\nPATH\nTIMESTAMP\nBODY
         signature_string = f"{method}\n{path}\n{timestamp}\n{body}"
         
-                # Generate HMAC-SHA256 signature
-                signature = hmac.new(
-                    self.apisecret.encode('utf-8'),
+        # Generate HMAC-SHA256 signature
+        signature = hmac.new(
+            self.apisecret.encode('utf-8'),
             signature_string.encode('utf-8'),
-                    hashlib.sha256
-                    ).hexdigest()
-                    
-                    return signature
-            
+            hashlib.sha256
+        ).hexdigest()
+        
+        return signature
+    
     def _make_request(self, method: str, endpoint: str, json_data: dict = None) -> dict:
-                """Make authenticated request to Makro API using HMAC signature."""
-                timestamp = str(int(time.time() * 1000))
-                path = endpoint.replace(self.baseurl, '')
-                body = json.dumps(json_data) if json_data else ''
+        """Make authenticated request to Makro API using HMAC signature."""
+        timestamp = str(int(time.time() * 1000))
+        path = endpoint.replace(self.baseurl, '')
+        body = json.dumps(json_data) if json_data else ''
         
-                signature = self._generate_signature(method, path, timestamp, body)
+        signature = self._generate_signature(method, path, timestamp, body)
         
-                headers = {
-                        'X-API-Key': self.apikey,
-                        'X-Signature': signature,
-                        'X-Timestamp': timestamp,
-                        'Content-Type': 'application/json'
-                }
+        headers = {
+            'X-API-Key': self.apikey,
+            'X-Signature': signature,
+            'X-Timestamp': timestamp,
+            'Content-Type': 'application/json'
+        }
         
-                url = f"{self.baseurl}{path}"
-                        resp = self.session.request(method, url, json=json_data, headers=headers, timeout=15)
-                return resp
-        
+        url = f"{self.baseurl}{path}"
+        resp = self.session.request(method, url, json=json_data, headers=headers, timeout=15)
+        return resp
+    
     def create_listing(self, payload: dict) -> dict:
         """Create a listing on Makro."""
         if not self.apikey or not self.apisecret or DRY_RUN:
@@ -99,13 +98,13 @@ class MakroApi:
         }
         
         try:
-            resp = self._make_request('POST', '', makro_payload)   
-
-                    resp.raise_for_status()
+            resp = self._make_request('POST', '', makro_payload)
+            resp.raise_for_status()
             return resp.json()
-                    except Exception as e:
+        except Exception as e:
             logger.error(f"Failed to create listing: {e}")
             return {'status': 'error', 'message': str(e)}
+    
     def update_listing_status(self, listing_id: str, status: str) -> dict:
         """Update a listing status (e.g., INACTIVE to ACTIVE)."""
         if DRY_RUN:
@@ -115,7 +114,6 @@ class MakroApi:
         # Implementation would depend on Makro API update endpoint
         logger.info(f"Updating listing {listing_id} to {status}")
         return {'status': 'success'}
-
 
 class ReviewQueue:
     """Manages the review queue using Google Sheets CSV export."""
@@ -167,7 +165,6 @@ class ReviewQueue:
         queue = self.fetch_queue()
         return [item for item in queue if item.get('review_status', '').upper() == 'PENDING']
 
-
 def generate_sample_products(count: int = 10) -> list:
     """Generate sample supplier products for testing."""
     categories = ['Electronics', 'Home & Garden', 'Kitchen', 'Automotive', 'Sports']
@@ -190,7 +187,6 @@ def generate_sample_products(count: int = 10) -> list:
     
     return products
 
-
 def score_and_filter_candidates(products: list) -> list:
     """Score products and filter based on business rules."""
     filtered = []
@@ -211,7 +207,6 @@ def score_and_filter_candidates(products: list) -> list:
     filtered.sort(key=lambda x: x.get('priority_score', 0), reverse=True)
     
     return filtered[:MAX_CANDIDATES_PER_RUN]
-
 
 def job_ingest_candidates(makro: MakroApi, queue: ReviewQueue):
     """Job 1: Ingest supplier data, create draft listings, add to review queue."""
@@ -259,7 +254,6 @@ def job_ingest_candidates(makro: MakroApi, queue: ReviewQueue):
     logger.info(f"job_ingest_candidates completed: {len(candidates)} candidates added to queue")
     return {'ingested': len(candidates)}
 
-
 def job_activate_approved(makro: MakroApi, queue: ReviewQueue):
     """Job 2: Read approved items from queue and activate their Makro listings."""
     logger.info("Starting job_activate_approved")
@@ -295,7 +289,6 @@ def job_activate_approved(makro: MakroApi, queue: ReviewQueue):
     logger.info(f"job_activate_approved completed: {activated} listings activated")
     return {'activated': activated}
 
-
 def main():
     """Main entry point."""
     logger.info(f"Starting main in mode={MODE}")
@@ -317,7 +310,6 @@ def main():
         logger.exception(f"Job failed: {e}")
     
     logger.info("main.py exiting")
-
 
 if __name__ == '__main__':
     main()
