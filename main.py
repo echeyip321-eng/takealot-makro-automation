@@ -228,6 +228,7 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
 
         if not approved_items:
         logger.info("No approved items to process")
+            return
     
     logger.info(f"Processing {len(approved_items)} approved items...")
     
