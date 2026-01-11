@@ -5,8 +5,6 @@ import requests
 import base64
 from datetime import datetime
 import json
-import hmac
-import hashlib
 import csv
 import io
 
@@ -23,69 +21,101 @@ MARKUP_MULTIPLIER = float(os.getenv('MARKUP_MULTIPLIER', 2.8))
 MIN_MARGIN_THRESHOLD = float(os.getenv('MIN_MARGIN_THRESHOLD', 0.3))  # 30% minimum margin
 MAX_CANDIDATES_PER_RUN = int(os.getenv('MAX_CANDIDATES_PER_RUN', 10))
 RUN_MODE = os.getenv('RUN_MODE', 'once')  # 'once' or 'scheduled'
-MAKRO_API_KEY = os.getenv('MAKRO_API_KEY', '')
-MAKRO_API_SECRET = os.getenv('MAKRO_API_SECRET', '')
+MAKRO_APP_ID = os.getenv('MAKRO_API_KEY', '')
+MAKRO_APP_SECRET = os.getenv('MAKRO_API_SECRET', '')
 DRY_RUN = os.getenv('DRY_RUN', '1') == '1'
 GOOGLE_SHEETS_CSV_URL = os.getenv('GOOGLE_SHEETS_CSV_URL', '')  # Published CSV URL
 MODE = os.getenv('MODE', 'ingest')  # 'ingest' or 'activate'
 
-class MakroApi:
-    def __init__(self, apikey, apisecret):
-        self.apikey = apikey
-        self.apisecret = apisecret
-        self.base_url = 'https://app-seller-inventory.prod.de.metro-marketplace.cloud/openapi/v2'
-        self.session = requests.Session()
+class MakroAuth:
+    """OAuth 2.0 authentication for Makro Marketplace API"""
+    def __init__(self, app_id, app_secret):
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.token = None
+        self.expiry = 0
+        self.token_url = 'https://seller.makro.co.za/api/oauth-service/oauth/token'
+    
+    def get_token(self):
+        # Return cached token if still valid
+        if self.token and time.time() < self.expiry:
+            logger.debug("Using cached access token")
+            return self.token
         
-    def _sign_request(self, method, uri, body, timestamp):
-        message = f"{method}{uri}{body}{timestamp}"
-        signature = hmac.new(
-            self.apisecret.encode('utf-8'),
-            message.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-        return signature
+        logger.info("Fetching new OAuth access token...")
+        try:
+            resp = requests.get(
+                self.token_url,
+                params={
+                    'grant_type': 'client_credentials',
+                    'scope': 'Seller_Api'
+                },
+                auth=(self.app_id, self.app_secret),
+                timeout=30
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            self.token = data['access_token']
+            # Set expiry with 60 second buffer
+            self.expiry = time.time() + data.get('expires_in', 3600) - 60
+            
+            logger.info(f"Successfully obtained access token (expires in {data.get('expires_in')} seconds)")
+            return self.token
+            
+        except Exception as e:
+            logger.error(f"Failed to get access token: {e}")
+            raise
+
+class MakroApi:
+    """Makro Marketplace API client using OAuth 2.0"""
+    def __init__(self, auth: MakroAuth):
+        self.auth = auth
+        self.base_url = 'https://seller.makro.co.za/api'
+        self.session = requests.Session()
+    
+    def _headers(self):
+        return {
+            'Authorization': f'Bearer {self.auth.get_token()}',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+        }
     
     def _request(self, method, endpoint, json_body=None):
-        uri = f"{self.base_url}{endpoint}"
-        timestamp = int(time.time())
-        body = ''
-        if json_body:
-            body = json.dumps(json_body, separators=(',', ':'))
+        url = f"{self.base_url}{endpoint}"
         
-        signature = self._sign_request(method.upper(), endpoint, body, timestamp)
-        
-        headers = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'X-Client-Id': self.apikey,
-            'X-Timestamp': str(timestamp),
-            'X-Signature': signature,
-        }
-        
-        logger.debug(f"{method} {uri}")
-        resp = self.session.request(method, uri, headers=headers, data=body if body else None, timeout=30)
+        logger.debug(f"{method} {url}")
+        resp = self.session.request(
+            method, 
+            url, 
+            headers=self._headers(), 
+            json=json_body if json_body else None,
+            timeout=30
+        )
         resp.raise_for_status()
         return resp.json() if resp.text else {}
     
-    def get_products(self, limit=100, offset=0):
-        return self._request('GET', f'/offers?limit={limit}&offset={offset}')
+    def get_listings(self, limit=100, offset=0):
+        """Get seller's active listings"""
+        return self._request('GET', f'/listings/v5/?limit={limit}&offset={offset}')
     
-    def search_marketplace(self, title):
-        try:
-            products = self.get_products(limit=100)
-            for p in products.get('data', []):
-                if title.lower() in p.get('title', '').lower():
-                    return p
-            return None
-        except Exception as e:
-            logger.warning(f"Search failed: {e}")
-            return None
+    def search_listings(self, sku=None, fsn=None):
+        """Search for listings by SKU or FSN"""
+        params = []
+        if sku:
+            params.append(f'sku={sku}')
+        if fsn:
+            params.append(f'fsn={fsn}')
+        query = '&'.join(params)
+        return self._request('GET', f'/listings/v5/?{query}')
     
     def create_listing(self, payload):
-        return self._request('POST', '/offers', json_body=payload)
+        """Create a new listing"""
+        return self._request('POST', '/listings/v5/', json_body=payload)
     
-    def update_listing(self, product_id, payload):
-        return self._request('PATCH', f'/offers/{product_id}', json_body=payload)
+    def update_listing(self, listing_id, payload):
+        """Update an existing listing"""
+        return self._request('PUT', f'/listings/v5/{listing_id}', json_body=payload)
 
 class ReviewQueue:
     def __init__(self, csv_url):
@@ -97,141 +127,147 @@ class ReviewQueue:
             return []
         
         try:
-            logger.info(f"Fetching CSV from: {self.csv_url}")
-            response = requests.get(self.csv_url, timeout=15)
-            response.raise_for_status()
+            logger.info("Fetching approved items from Google Sheets...")
+            resp = requests.get(self.csv_url, timeout=30)
+            resp.raise_for_status()
             
-            csv_data = io.StringIO(response.text)
-            reader = csv.DictReader(csv_data)
+            csv_data = csv.DictReader(io.StringIO(resp.text))
+            approved = []
             
-            approved = [row for row in reader if row.get('review_status', '').upper() == 'APPROVED']
+            for row in csv_data:
+                status = row.get('Status', '').strip().lower()
+                if status == 'approved':
+                    approved.append({
+                        'takealot_sku': row.get('Takealot SKU', '').strip(),
+                        'fsn': row.get('FSN', '').strip(),
+                        'title': row.get('Title', '').strip(),
+                        'takealot_price': float(row.get('Takealot Price', 0)),
+                        'suggested_price': float(row.get('Suggested Makro Price', 0)),
+                        'margin': float(row.get('Margin %', 0)),
+                    })
+            
             logger.info(f"Found {len(approved)} approved items")
             return approved
+            
         except Exception as e:
-            logger.error(f"Failed to read CSV: {e}")
+            logger.error(f"Failed to fetch approved items: {e}")
             return []
     
-    def log_candidate(self, candidate):
-        logger.info(f"CANDIDATE: {candidate.get('sku')}, {candidate.get('title')}, {candidate.get('supplier_cost')}, {candidate.get('your_price')}, {candidate.get('expected_margin')}%, {candidate.get('priority_score')}, {candidate.get('category')}, {candidate.get('makro_listing_id')}, {candidate.get('makro_status')}")
+    def mark_as_listed(self, takealot_sku, listing_id):
+        logger.info(f"Would mark {takealot_sku} as listed with Makro listing {listing_id}")
+        # In production, update the Google Sheet via Sheets API
 
-def generate_sample_products():
-    return [
-        {'sku': f'SAMPLE-{i:03d}', 'title': f'Sample Electronics Product {i}', 'cost': 100 + i*10, 'category': 'Electronics'}
-        for i in range(1, MAX_CANDIDATES_PER_RUN + 1)
-    ]
+class TakealotScraper:
+    """Placeholder - integrate your Takealot scraping logic"""
+    def get_product_info(self, sku):
+        # Mock data - replace with actual scraping
+        return {
+            'title': f'Sample Product {sku}',
+            'price': 199.99,
+            'available': True,
+            'image_url': 'https://example.com/image.jpg'
+        }
 
-def calculate_margin(cost, price):
-    if price <= 0:
-        return 0
-    return round((price - cost) / price * 100, 2)
-
-def score_product(candidate):
-    margin = candidate.get('expected_margin', 0)
-    score = margin * 1.5
-    return round(score, 2)
-
-def job_ingest_candidates():
-    logger.info("JOB: Ingest Candidates")
-    makro = MakroApi(MAKRO_API_KEY, MAKRO_API_SECRET)
-    queue = ReviewQueue(GOOGLE_SHEETS_CSV_URL)
-    supplier_products = generate_sample_products()
-    logger.info(f"Fetched {len(supplier_products)} products from supplier")
-    candidates = []
+def ingest_mode(makro_api, takealot_scraper):
+    """Scan Takealot, find candidates, and populate Google Sheet"""
+    logger.info("=== INGEST MODE ===")
+    logger.info("This would scan Takealot products and populate candidates in the Google Sheet")
+    logger.info("For now, manually add candidates to the Google Sheet with FSNs")
     
-    for p in supplier_products[:MAX_CANDIDATES_PER_RUN]:
-        cost = p.get('cost', 0)
-        price = round(cost * MARKUP_MULTIPLIER, 2)
-        margin = calculate_margin(cost, price)
+    # Implementation:
+    # 1. Scan Takealot categories/products
+    # 2. Calculate margins with MARKUP_MULTIPLIER
+    # 3. Filter by MIN_MARGIN_THRESHOLD
+    # 4. Write to Google Sheet with Status='Pending Review'
+
+def activate_mode(makro_api, review_queue, takealot_scraper):
+    """Process approved items from Google Sheet and create Makro listings"""
+    logger.info("=== ACTIVATE MODE ===")
+    
+    approved_items = review_queue.get_approved_items()
+    
+    if not approved_items:
+        logger.info("No approved items to process")
+        return
+    
+    logger.info(f"Processing {len(approved_items)} approved items...")
+    
+    for idx, item in enumerate(approved_items[:MAX_CANDIDATES_PER_RUN], 1):
+        logger.info(f"\n[{idx}/{len(approved_items)}] Processing: {item['title']}")
+        logger.info(f"  Takealot SKU: {item['takealot_sku']}")
+        logger.info(f"  FSN: {item['fsn']}")
+        logger.info(f"  Suggested Price: R{item['suggested_price']:.2f}")
         
-        if margin < MIN_MARGIN_THRESHOLD * 100:
-            logger.info(f"Skipping {p['title']} - margin too low ({margin}%)")
+        if not item['fsn']:
+            logger.warning("  ⚠️ No FSN provided - skipping")
             continue
         
-        existing = makro.search_marketplace(p['title'])
-        if existing:
-            logger.info(f"Skipping {p['title']} - already on Makro")
-            continue
-        
-        payload = {'title': p['title'], 'description': f"Auto-imported. SKU: {p['sku']}", 'price': price, 'status': 'INACTIVE', 'sku': p['sku']}
-        
+        # Check if already listed
         try:
-            if not DRY_RUN:
-                result = makro.create_listing(payload)
-                makro_id = result.get('id')
-            else:
-                logger.info(f"DRY RUN: Would create {p['title']} at {price}")
-                makro_id = f"DRYRUN-{p['sku']}"
-            
-            candidate = {'sku': p['sku'], 'title': p['title'], 'supplier_cost': cost, 'your_price': price, 'expected_margin': margin, 'priority_score': 0, 'category': p.get('category', ''), 'makro_listing_id': makro_id, 'makro_status': 'INACTIVE'}
-            candidate['priority_score'] = score_product(candidate)
-            candidates.append(candidate)
-            logger.info(f"Created draft: {p['title']} (margin={margin}%)")
+            existing = makro_api.search_listings(sku=item['takealot_sku'])
+            if existing.get('listings'):
+                logger.info("  ℹ️ Already listed on Makro")
+                continue
         except Exception as e:
-            logger.error(f"Failed to create {p['title']}: {e}")
-    
-    candidates.sort(key=lambda x: x['priority_score'], reverse=True)
-    logger.info("COPY THESE CANDIDATES TO GOOGLE SHEET:")
-    for c in candidates:
-        queue.log_candidate(c)
-    logger.info(f"Total: {len(candidates)} candidates logged")
-    return {'ingested': len(candidates)}
-
-def job_publish_approved():
-    logger.info("JOB: Publish Approved")
-    makro = MakroApi(MAKRO_API_KEY, MAKRO_API_SECRET)
-    queue = ReviewQueue(GOOGLE_SHEETS_CSV_URL)
-    approved = queue.get_approved_items()
-    
-    if not approved:
-        logger.info("No approved items to publish")
-        return {'activated': 0}
-    
-    activated = 0
-    for item in approved:
-        makro_id = item.get('makro_listing_id')
-        if not makro_id or makro_id.startswith('DRYRUN'):
-            logger.warning(f"Skipping {item.get('title', 'Unknown')} - no valid Makro ID")
-            continue
+            logger.warning(f"  Could not check existing listings: {e}")
         
-        takealot_price = item.get('takealot_price')
-        final_price = float(item.get('your_price', 0))
-        if takealot_price:
+        # Create listing payload
+        payload = {
+            'fsn': item['fsn'],
+            'seller_sku': item['takealot_sku'],
+            'price': item['suggested_price'],
+            'stock': 10,  # Default stock
+            'procurement_sla': 2,  # Days to fulfill
+            'listing_status': 'ACTIVE'
+        }
+        
+        if DRY_RUN:
+            logger.info(f"  [DRY RUN] Would create listing: {json.dumps(payload, indent=2)}")
+        else:
             try:
-                competitor_price = float(takealot_price)
-                final_price = round(competitor_price * 0.95, 2)
-            except ValueError:
-                pass
+                result = makro_api.create_listing(payload)
+                listing_id = result.get('listing_id')
+                logger.info(f"  ✅ Successfully created listing {listing_id}")
+                review_queue.mark_as_listed(item['takealot_sku'], listing_id)
+            except requests.exceptions.HTTPError as e:
+                logger.error(f"  ❌ Failed to create listing: {e}")
+                logger.error(f"  Response: {e.response.text}")
+            except Exception as e:
+                logger.error(f"  ❌ Error: {e}")
         
-        update_payload = {'status': 'ACTIVE', 'price': final_price, 'description': f"{item.get('title', '')} - vs Takealot: {item.get('takealot_link', 'N/A')}"}
-        
-        try:
-            if not DRY_RUN:
-                makro.update_listing(makro_id, update_payload)
-                logger.info(f"Activated: {item.get('title', 'Unknown')} at R{final_price}")
-                activated += 1
-            else:
-                logger.info(f"DRY RUN: Would activate {item.get('title', 'Unknown')} at R{final_price}")
-                activated += 1
-        except Exception as e:
-            logger.error(f"Failed to activate {item.get('title', 'Unknown')}: {e}")
+        time.sleep(2)  # Rate limiting
     
-    logger.info(f"Activated {activated} of {len(approved)} approved listings")
-    return {'activated': activated, 'total_approved': len(approved)}
+    logger.info("\n=== ACTIVATION COMPLETE ===")
 
 def main():
-    logger.info("Starting Takealot-Makro automation")
-    logger.info(f"Mode: {MODE}, Dry Run: {DRY_RUN}")
+    logger.info("Takealot → Makro Automation Starting...")
+    logger.info(f"Mode: {MODE}")
+    logger.info(f"Dry Run: {DRY_RUN}")
     
+    # Initialize components
+    auth = MakroAuth(MAKRO_APP_ID, MAKRO_APP_SECRET)
+    makro_api = MakroApi(auth)
+    review_queue = ReviewQueue(GOOGLE_SHEETS_CSV_URL)
+    takealot_scraper = TakealotScraper()
+    
+    # Test authentication
+    try:
+        logger.info("Testing Makro API authentication...")
+        token = auth.get_token()
+        logger.info("✅ Authentication successful")
+    except Exception as e:
+        logger.error(f"❌ Authentication failed: {e}")
+        return
+    
+    # Run mode
     if MODE == 'ingest':
-        result = job_ingest_candidates()
-        logger.info(f"Ingest job result: {result}")
+        ingest_mode(makro_api, takealot_scraper)
     elif MODE == 'activate':
-        result = job_publish_approved()
-        logger.info(f"Activate job result: {result}")
+        activate_mode(makro_api, review_queue, takealot_scraper)
     else:
-        logger.error(f"Unknown MODE: {MODE}. Use 'ingest' or 'activate'")
+        logger.error(f"Unknown mode: {MODE}")
     
-    logger.info("main.py exiting")
+    logger.info("\nmain.py exiting")
 
 if __name__ == '__main__':
     main()
