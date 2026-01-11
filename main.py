@@ -271,16 +271,16 @@ def activate_mode(makro_api, review_queue, takealot_scrap, fsn_finderer):
         if DRY_RUN:
             logger.info(f"  [DRY RUN] Would create listing: {json.dumps(payload, indent=2)}")
             else:
-            try:
-                result = makro_api.create_listing(payload)
-                listing_id = result.get('listing_id')
-                logger.info(f"  ✅ Successfully created listing {listing_id}")
-                review_queue.mark_as_listed(item['takealot_sku'], listing_id)
-            except requests.exceptions.HTTPError as e:
-                logger.error(f"  ❌ Failed to create listing: {e}")
-                logger.error(f"  Response: {e.response.text}")
-            except Exception as e:
-                logger.error(f"  ❌ Error: {e}")
+                    try:
+                            result = makro_api.create_listing(payload)
+                            listing_id = result.get('listing_id')
+                            logger.info(f"  ✅ Successfully created listing {listing_id}")
+                            review_queue.mark_as_listed(item['takealot_sku'], listing_id)
+                    except requests.exceptions.HTTPError as e:
+                            logger.error(f"  ❌ Failed to create listing: {e}")
+                            logger.error(f"  Response: {e.response.text}")
+                    except Exception as e:
+                            logger.error(f"  ❌ Error: {e}")
         
         time.sleep(2)  # Rate limiting
     
