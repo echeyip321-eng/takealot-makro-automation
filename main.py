@@ -1,4 +1,44 @@
 import os
+import re
+
+class MakroFSNFinder:
+    """Automatically find FSN IDs by searching Makro's website"""
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+    
+    def search_makro(self, product_title):
+        """Search Makro website and extract FSN from first result"""
+        try:
+            # Clean up the title for search
+            search_query = product_title.replace('DH - ', '').replace('Cappuccino', '').strip()
+            
+            logger.info(f"Searching Makro for: {search_query}")
+            
+            # Search Makro
+            search_url = f"https://www.makro.co.za/search?q={requests.utils.quote(search_query)}"
+            resp = self.session.get(search_url, timeout=30)
+            resp.raise_for_status()
+            
+            # Look for pid= parameter in the response HTML
+            # Match FSN pattern: pid=XXXXXXXXXXXXXXXX (13-16 chars)
+            fsn_matches = re.findall(r'pid=([A-Z0-9]{13,16})', resp.text)
+            
+            if fsn_matches:
+                # Get the first unique FSN
+                unique_fsns = list(dict.fromkeys(fsn_matches))  # Remove duplicates
+                fsn = unique_fsns[0]
+                logger.info(f"  ✅ Found FSN: {fsn}")
+                return fsn
+            else:
+                logger.warning(f"  ⚠️ No FSN found for: {product_title}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error searching Makro: {e}")
+            return None
 import time
 import logging
 import requests
@@ -172,15 +212,14 @@ def ingest_mode(makro_api, takealot_scraper):
     """Scan Takealot, find candidates, and populate Google Sheet"""
     logger.info("=== INGEST MODE ===")
     logger.info("This would scan Takealot products and populate candidates in the Google Sheet")
-    logger.info("For now, manually add candidates to the Google Sheet with FSNs")
-    
+    logger.info("For now, use the FSN finder in activate mode - it will auto-find FSNs")    
     # Implementation:
     # 1. Scan Takealot categories/products
     # 2. Calculate margins with MARKUP_MULTIPLIER
     # 3. Filter by MIN_MARGIN_THRESHOLD
     # 4. Write to Google Sheet with Status='Pending Review'
 
-def activate_mode(makro_api, review_queue, takealot_scraper):
+def activate_mode(makro_api, review_queue, takealot_scrap, fsn_finderer):
     """Process approved items from Google Sheet and create Makro listings"""
     logger.info("=== ACTIVATE MODE ===")
     
@@ -199,6 +238,14 @@ def activate_mode(makro_api, review_queue, takealot_scraper):
         logger.info(f"  Suggested Price: R{item['suggested_price']:.2f}")
         
         if not item['fsn']:
+                        # Try to find FSN automatically
+            logger.info(f"  🔍 No FSN provided - searching Makro automatically...")
+            found_fsn = fsn_finder.search_makro(item['title'])
+            
+            if found_fsn:
+                item['fsn'] = found_fsn
+                logger.info(f"  ✅ Auto-found FSN: {found_fsn}")
+            else:
             logger.warning("  ⚠️ No FSN provided - skipping")
             continue
         
@@ -249,6 +296,7 @@ def main():
     makro_api = MakroApi(auth)
     review_queue = ReviewQueue(GOOGLE_SHEETS_CSV_URL)
     takealot_scraper = TakealotScraper()
+        fsn_finder = MakroFSNFinder()
     
     # Test authentication
     try:
@@ -261,9 +309,9 @@ def main():
     
     # Run mode
     if MODE == 'ingest':
-        ingest_mode(makro_api, takealot_scraper)
+        ingest_mode(makro_api, takealot_scraper, fsn_finder)
     elif MODE == 'activate':
-        activate_mode(makro_api, review_queue, takealot_scraper)
+        activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder)
     else:
         logger.error(f"Unknown mode: {MODE}")
     
