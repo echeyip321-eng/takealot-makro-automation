@@ -2,3 +2,5 @@ requests==2.31.0
 beautifulsoup4==4.12.2
 schedule==1.2.0
 html5lib==1.1
+playwright==1.40.0
+playwright-stealth==0.0.1
