@@ -1,6 +1,5 @@
 [phases.setup]
-aptPkgs = ["libxml2-dev", "libxslt-dev", "gcc", "g++", "python3-dev"]
-
+aptPkgs = ["libxml2-dev", "libxslt-dev", "gcc", "g++", "python3-dev", "build-essential", "python3-setuptools", "python3-wheel"]
 [phases.install]
 cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"], "playwright install --with-deps chromium"
 
