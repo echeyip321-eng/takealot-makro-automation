@@ -86,7 +86,7 @@ class MakroApi:
         
         try:
             resp = self.session.request(method, url, data=body, headers=headers, timeout=30)
-                        logger.info(f"Response status: {resp.status_code}")
+            logger.info(f"Response status: {resp.status_code}")
             return resp
         except Exception as e:
             logger.error(f"Request failed: {e}")
