@@ -285,9 +285,9 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         logger.info(f"Price: R{price}")
 
             # Skip items with invalid price
-                    if price <= 0:
-                                logger.warning(f"Outcome=SKIPPED reason=INVALID_PRICE SKU={sku}")
-                                continue
+        if price <= 0:
+                                            logger.warning(f"Outcome=SKIPPED reason=INVALID_PRICE SKU={sku}")
+                                            continue
 
         # Auto-find FSN if missing
         if not fsn:
@@ -299,51 +299,8 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
 
         # Skip duplicate check for now due to 405 error
         # Will create listing directly
-        
-        payload = {
-            "listing_records": [{
-                "product_id": fsn,
-                "listing_status": "ACTIVE",
-                "sku_id": sku,
-                "selling_region_pref": "National",
-                "min_oq": 1,
-                "max_oq": 100,
-                "price": {
-                    "base_price": price,
-                    "selling_price": price,
-                    "currency": "ZAR"
-                },
-                "shipping_fees": {
-                    "local": 1,
-                    "zonal": 1,
-                    "national": 1
-                },
-                "fulfillment_profile": "NONFBM",
-                "fulfillment": {
-                    "dispatch_sla": 3,
-                    "shipping_provider": "SELLER",
-                    "procurement_type": "REGULAR"
-                },
-                "packages": [{
-                    "name": "standard",
-                    "dimensions": {
-                        "length": 30,
-                        "breadth": 30,
-                        "height": 30
-                    },
-                    "weight": 5,
-                    "description": "Standard package",
-                    "handling": {
-                        "fragile": False
-                    }
-                }],
-                "locations": [{
-                    "id": os.getenv('MAKRO_LOCATION_ID', 'LOC4cef7f9b88a14df79646ba1c9dca25e9'),
-                    "status": "Active",
-                    "inventory": 10
-                }]
-            }]
-        }
+
+                payload = build_makro_listing(fsn, sku, price, os.getenv('MAKRO_LOCATION_ID', 'LOC4cef7f9b88a14df79646ba1c9dca25e9'), 10)
         if DRY_RUN:
             logger.info(f"[DRY RUN] Would create listing with payload: {json.dumps(payload, indent=2)}")
             logger.info(f"Outcome=DRY_RUN_SUCCESS")
