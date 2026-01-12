@@ -115,6 +115,7 @@ class MakroApi:
         self.auth = auth
         self.base_url = 'https://seller.makro.co.za/api'
         self.session = requests.Session()
+                self.session.trust_env = False
 
     def _headers(self):
         return {
@@ -131,24 +132,26 @@ class MakroApi:
             url,
             headers=self._headers(),
             json=json_body,
-            timeout=30
+            timeout=30,
+            allow_redirects=False
         )
         
-        # Enhanced error logging
-        if resp.status_code == 405:
-            logger.error(f"405 Method Not Allowed: {method} {url}")
-            logger.error(f"Allow header: {resp.headers.get('Allow', 'N/A')}")
-            logger.error(f"Response body: {resp.text[:1000]}")
-        elif resp.status_code in (400, 401, 403, 404, 409, 422):
-            logger.error(f"{resp.status_code} error: {method} {url}")
-            logger.error(f"Response: {resp.text[:2000]}")
+        # Check for redirects (3xx status codes)
+        if 300 <= resp.status_code < 400:
+            logger.error(f"REDIRECT: {resp.status_code} {method} {url}")
+            logger.error(f"Location: {resp.headers.get('Location')}")
+            raise RuntimeError("Makro API redirected to a different host. Blocked for safety")
         
-        resp.raise_for_status()
-        return resp.json() if resp.text else {}
-
+        if resp.status_code >= 400:
+            logger.error(f"HTTP {resp.status_code}: {method} {url}")
+            logger.error(f"Body: {resp.text[:10000]}")
+            resp.raise_for_status()
+        
+        return resp.json() if resp.text else None
+        
     def create_listing(self, payload):
         """Create a new listing"""
-        return self._request('POST', '/listings/v5', json_body=payload)
+        return self._request('POST', '/listings/v5/', json_body=payload)
 
 class ReviewQueue:
     def __init__(self, csv_url):
