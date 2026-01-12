@@ -211,6 +211,54 @@ def ingest_mode(makro_api, takealot_scraper):
     logger.info("Populate Google Sheet with candidates")
 
 
+
+def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inventory: int = 10):
+    """Build correct Makro SA v5 API listing payload with lowercase no-underscore fields"""
+    return {
+        "listingrecords": [{
+            "productid": fsn,
+            "listingstatus": "ACTIVE",
+            "skuid": sku,
+            "sellingregionpref": "National",
+            "minoq": 1,
+            "maxoq": 100,
+            "price": {
+                "baseprice": price,
+                "sellingprice": price,
+                "currency": "ZAR"
+            },
+            "shippingfees": {
+                "local": 1,
+                "zonal": 1,
+                "national": 1
+            },
+            "fulfillmentprofile": "NONFBM",
+            "fulfillment": {
+                "dispatchsla": 3,
+                "shippingprovider": "SELLER",
+                "procurementtype": "REGULAR"
+            },
+            "packages": [{
+                "name": "standard",
+                "dimensions": {
+                    "length": 30,
+                    "breadth": 30,
+                    "height": 30
+                },
+                "weight": 5,
+                "description": "Standard package",
+                "handling": {
+                    "fragile": False
+                }
+            }],
+            "locations": [{
+                "id": location_id,
+                "status": "Active",
+                "inventory": inventory
+            }]
+        }]
+    }
+    
 def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
     """Process approved items and create Makro listings"""
     
