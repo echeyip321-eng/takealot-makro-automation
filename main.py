@@ -274,6 +274,7 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         return
 
     for item in approved_items:
+                payload = None
         sku = item['takealot_sku']
         fsn = item['fsn']
         title = item['title']
@@ -316,8 +317,10 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
                 review_queue.mark_as_listed(sku, listing_id)
                 
             except Exception as e:
-                logger.error(f"❌ Failed to create listing: {e}")
-                logger.error(f"Outcome=FAILED error={str(e)[:200]}")
+                            # Only log payload if it was successfully created
+                            if payload is not None:
+                    logger.error(f"❌ Failed to create listing: {e}")
+                    logger.error(f"Outcome=FAILED error={str(e)[:200]}")
 
 
 def main():
