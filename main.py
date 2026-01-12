@@ -177,7 +177,7 @@ class ReviewQueue:
             for row in csv_data:
                 status = row.get('Status', '').strip().lower()
             logger.info(f"Row: {row.get('Takealot SKU', '')} - Status: {status}")
-                if status in ['approved', 'candidate']:
+            if status in ['approved', 'candidate']:
                     approved.append({
                         'takealot_sku': row.get('Takealot SKU', '').strip(),
                         'fsn': row.get('FSN', '').strip(),
