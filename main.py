@@ -237,7 +237,7 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         logger.info(f"Price: R{price}")
 
             # Skip items with invalid price
-                    if rice <= 0:
+                    if price <= 0:
                                 logger.warning(f"Outcome=SKIPPED reason=INVALID_PRICE SKU={sku}")
                                 continue
 
