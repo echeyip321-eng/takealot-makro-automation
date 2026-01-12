@@ -274,8 +274,7 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         return
 
     for item in approved_items:
-                payload = None
-        sku = item['takealot_sku']
+                sku = item['takealot_sku']
         fsn = item['fsn']
         title = item['title']
         price = item['suggested_price']
