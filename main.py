@@ -247,13 +247,49 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         # Will create listing directly
         
         payload = {
-            'seller_sku': sku,
-            'fsn': fsn,
-            'price': price,
-            'quantity': 10,
-            'enabled': True
+            "listingrecords": [{
+                "productid": fsn,
+                "listingstatus": "ACTIVE",
+                "skuid": sku,
+                "sellingregionpref": "National",
+                "minoq": 1,
+                "maxoq": 100,
+                "price": {
+                    "baseprice": price,
+                    "sellingprice": price,
+                    "currency": "ZAR"
+                },
+                "shippingfees": {
+                    "local": 1,
+                    "zonal": 1,
+                    "national": 1
+                },
+                "fulfillmentprofile": "NONFBM",
+                "fulfillment": {
+                    "dispatchsla": 3,
+                    "shippingprovider": "SELLER",
+                    "procurementtype": "REGULAR"
+                },
+                "packages": [{
+                    "name": "standard",
+                    "dimensions": {
+                        "length": 30,
+                        "breadth": 30,
+                        "height": 30
+                    },
+                    "weight": 5,
+                    "description": "Standard package",
+                    "handling": {
+                        "fragile": False
+                    }
+                }],
+                "locations": [{
+                    "id": os.getenv('MAKRO_LOCATION_ID', 'LOC4cef7f9b88a14df79646ba1c9dca25e9'),
+                    "status": "Active",
+                    "inventory": 10
+                }]
+            }]
         }
-
         if DRY_RUN:
             logger.info(f"[DRY RUN] Would create listing with payload: {json.dumps(payload, indent=2)}")
             logger.info(f"Outcome=DRY_RUN_SUCCESS")
