@@ -148,8 +148,7 @@ class MakroApi:
 
     def create_listing(self, payload):
         """Create a new listing"""
-        return self._request('POST', '/listings/v5/', json_body=payload)
-
+        return self._request('POST', '/listings/v5', json_body=payload)
 
 class ReviewQueue:
     def __init__(self, csv_url):
