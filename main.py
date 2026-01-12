@@ -236,6 +236,11 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         logger.info(f"Title: {title}")
         logger.info(f"Price: R{price}")
 
+                # Skip items with invalid price
+                if price <= 0:
+                                logger.warning(f"Outcome=SKIPPED reason=INVALID_PRICE SKU={sku}")
+                                continue
+
         # Auto-find FSN if missing
         if not fsn:
             logger.info("FSN not provided, searching Makro...")
@@ -248,28 +253,28 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         # Will create listing directly
         
         payload = {
-            "listingrecords": [{
-                "productid": fsn,
-                "listingstatus": "ACTIVE",
-                "skuid": sku,
-                "sellingregionpref": "National",
-                "minoq": 1,
-                "maxoq": 100,
+            "listing_records": [{
+                "product_id": fsn,
+                "listing_status": "ACTIVE",
+                "sku_id": sku,
+                "selling_region_pref": "National",
+                "min_oq": 1,
+                "max_oq": 100,
                 "price": {
-                    "baseprice": price,
-                    "sellingprice": price,
+                    "base_price": price,
+                    "selling_price": price,
                     "currency": "ZAR"
                 },
-                "shippingfees": {
+                "shipping_fees": {
                     "local": 1,
                     "zonal": 1,
                     "national": 1
                 },
-                "fulfillmentprofile": "NONFBM",
+                "fulfillment_profile": "NONFBM",
                 "fulfillment": {
-                    "dispatchsla": 3,
-                    "shippingprovider": "SELLER",
-                    "procurementtype": "REGULAR"
+                    "dispatch_sla": 3,
+                    "shipping_provider": "SELLER",
+                    "procurement_type": "REGULAR"
                 },
                 "packages": [{
                     "name": "standard",
