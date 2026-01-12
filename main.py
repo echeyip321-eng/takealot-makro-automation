@@ -225,7 +225,8 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
 
         if not approved_items:
                 logger.info("No approved items to process")
-                            return
+                    return
+                            
     
     logger.info(f"Processing {len(approved_items)} approved items...")    
     for idx, item in enumerate(approved_items[:MAX_CANDIDATES_PER_RUN], 1):
