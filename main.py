@@ -227,6 +227,60 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
                     logger.info("No approved items to process")
                     return
 
+    # Process each approved item
+    for item in approved_items:
+        sku = item['takealot_sku']
+        fsn = item['fsn']
+        title = item['title']
+        price = item['suggested_price']
+        
+        logger.info(f"Processing {sku}: {title}")
+        
+        # Auto-find FSN if missing
+        if not fsn:
+            logger.info(f"  FSN not provided, searching Makro...")
+            fsn = fsn_finder.search_makro(title)
+            if not fsn:
+                logger.warning(f"  ⚠️ Could not find FSN for {sku}, skipping")
+                continue
+        
+        # Check if already listed on Makro
+        try:
+            if makro_api:
+                existing = makro_api.search_listings(sku=sku)
+                if existing.get('listings'):
+                    logger.info(f"  ℹ️ Already listed on Makro")
+                    continue
+        except Exception as e:
+            logger.error(f"  Error checking existing listings: {e}")
+        
+        # Create listing payload
+        payload = {
+            'sku': sku,
+            'fsn': fsn,
+            'price': price,
+            'quantity': 10,  # Default stock quantity
+            'enabled': True
+        }
+        
+        if DRY_RUN:
+            logger.info(f"  [DRY RUN] Would create listing: {payload}")
+        else:
+            try:
+                if not makro_api:
+                    logger.error("  ❌ Makro API not initialized (missing credentials)")
+                    continue
+                    
+                result = makro_api.create_listing(payload)
+                listing_id = result.get('listing_id', 'unknown')
+                logger.info(f"  ✅ Created Makro listing {listing_id}")
+                
+                # Mark as listed in the review queue
+                review_queue.mark_as_listed(sku, listing_id)
+                
+            except Exception as e:
+                logger.error(f"  ❌ Failed to create listing: {e}")
+
 def main():
     """Main entry point"""
     logger.info("=== Starting Takealot-Makro Automation ===")
