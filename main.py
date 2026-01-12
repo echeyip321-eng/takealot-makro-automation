@@ -227,3 +227,33 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
                     logger.info("No approved items to process")
                     return
 
+def main():
+    """Main entry point"""
+    logger.info("=== Starting Takealot-Makro Automation ===")
+    logger.info(f"Mode: {MODE}")
+    logger.info(f"DRY RUN: {DRY_RUN}")
+    
+    # Initialize components
+    fsn_finder = MakroFSNFinder()
+    review_queue = ReviewQueue(GOOGLE_SHEETS_CSV_URL)
+    takealot_scraper = TakealotScraper()
+    
+    # Initialize Makro API if credentials provided
+    makro_api = None
+    if MAKRO_APP_ID and MAKRO_APP_SECRET:
+        auth = MakroAuth(MAKRO_APP_ID, MAKRO_APP_SECRET)
+        makro_api = MakroApi(auth)
+    
+    # Run based on MODE
+    if MODE == 'ingest':
+        ingest_mode(makro_api, takealot_scraper)
+    elif MODE == 'activate':
+        activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder)
+    else:
+        logger.error(f"Unknown MODE: {MODE}")
+    
+    logger.info("=== Finished ===")
+
+if __name__ == "__main__":
+    main()
+
