@@ -220,12 +220,12 @@ def ingest_mode(makro_api, takealot_scraper):
     # 4. Write to Google Sheet with Status='Pending Review'
 
 def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):    
-    
+
         approved_items = review_queue.get_approved_items()        
 
         if not approved_items:
                 logger.info("No approved items to process")
-            return
+                            return
     
     logger.info(f"Processing {len(approved_items)} approved items...")    
     for idx, item in enumerate(approved_items[:MAX_CANDIDATES_PER_RUN], 1):
