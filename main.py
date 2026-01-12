@@ -115,7 +115,6 @@ class MakroApi:
         self.auth = auth
         self.base_url = 'https://seller.makro.co.za/api'
         self.session = requests.Session()
-                self.session.trust_env = False
 
     def _headers(self):
         return {
