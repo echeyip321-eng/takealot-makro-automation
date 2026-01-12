@@ -247,7 +247,7 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         # Will create listing directly
         
         payload = {
-            'sku': sku,
+            ''seller_sku'': sku,
             'fsn': fsn,
             'price': price,
             'quantity': 10,
