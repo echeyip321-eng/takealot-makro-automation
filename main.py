@@ -227,8 +227,7 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
                 logger.info("No approved items to process")
         return
     
-    logger.info(f"Processing {len(approved_items)} approved items...")
-    
+    logger.info(f"Processing {len(approved_items)} approved items...")    
     for idx, item in enumerate(approved_items[:MAX_CANDIDATES_PER_RUN], 1):
         logger.info(f"\n[{idx}/{len(approved_items)}] Processing: {item['title']}")
                 logger.info(f"  Takealot SKU: {item['takealot_sku']}")
