@@ -222,7 +222,7 @@ def ingest_mode(makro_api, takealot_scraper):
 def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):    
 
         approved_items = review_queue.get_approved_items()        
-
         if not approved_items:
-        logger.info("No approved items to process")
-        return
+                    logger.info("No approved items to process")
+                    return
+
