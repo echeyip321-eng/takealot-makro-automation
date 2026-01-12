@@ -167,7 +167,7 @@ class ReviewQueue:
             return []
         
         try:
-            logger.info("Fetching approved items from Google Sheets...")
+            logger.info("Fetching candidate items from Google Sheets...")
             resp = requests.get(self.csv_url, timeout=30)
             resp.raise_for_status()
             
@@ -176,7 +176,8 @@ class ReviewQueue:
             
             for row in csv_data:
                 status = row.get('Status', '').strip().lower()
-                if status == 'approved':
+                            logger.info(f"Row: {row.get('Takealot SKU', '')} - Status: {status}")
+                if status in ['approved', 'candidate']:
                     approved.append({
                         'takealot_sku': row.get('Takealot SKU', '').strip(),
                         'fsn': row.get('FSN', '').strip(),
