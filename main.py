@@ -305,3 +305,5 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
                 fsn=fsn,
                 sku=sku,
                 price=price,
+                                location_id='DEFAULT'
+                            )
