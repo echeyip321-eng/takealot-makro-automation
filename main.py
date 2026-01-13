@@ -212,30 +212,29 @@ def ingest_mode(makro_api, takealot_scraper):
 
 
 def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inventory: int = 10):
-    """Build correct Makro SA v5 API listing payload with lowercase no-underscore fields"""
-    return {
-        "listingrecords": [{
-            "productid": fsn,
-            "listingstatus": "ACTIVE",
-            "skuid": sku,
-            "sellingregionpref": "National",
-            "minoq": 1,
-            "maxoq": 100,
+    """Build Makro SA v5 API listing payload (snake_case as per Seller API guide)"""    return {
+        "listing_records": [{
+            "product_id": fsn,
+            "listing_status": "ACTIVE",
+            "sku_id": sku,
+            "selling_region_pref": "National",
+            "min_oq": 1,
+            "max_oq": 100,
             "price": {
-                "baseprice": price,
-                "sellingprice": price,
+                "base_price": price,
+                "selling_price": price,
                 "currency": "ZAR"
             },
-            "shippingfees": {
+            "shipping_fees": {
                 "local": 1,
                 "zonal": 1,
                 "national": 1
             },
-            "fulfillmentprofile": "NONFBM",
+            "fulfillment_profile": "NON_FBM",
             "fulfillment": {
-                "dispatchsla": 3,
-                "shippingprovider": "SELLER",
-                "procurementtype": "REGULAR"
+                "dispatch_sla": 3,
+                "shipping_provider": "SELLER",
+                "procurement_type": "REGULAR"
             },
             "packages": [{
                 "name": "standard",
@@ -259,7 +258,8 @@ def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inve
     }
 
 
-def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
+214
+(makro_api, review_queue, takealot_scraper, fsn_finder):
     """Process approved items and create Makro listings"""
 
     # Safety check for missing API credentials
