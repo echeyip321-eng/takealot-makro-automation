@@ -212,7 +212,7 @@ def ingest_mode(makro_api, takealot_scraper):
 
 
 def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inventory: int = 10):
-    """Build Makro SA v5 API listing payload (snake_case as per Seller API guide)"""    return {
+        """Build Makro SA v5 API listing payload (snake_case as per Seller API guide)"""     return {
         "listing_records": [{
             "product_id": fsn,
             "listing_status": "ACTIVE",
