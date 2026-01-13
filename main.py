@@ -275,10 +275,10 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         return
 
     for item in approved_items:
-                sku = item['takealot_sku']
-        fsn = item['fsn']
-        title = item['title']
-        price = item['suggested_price']
+                        sku = item['takealot_sku']
+                fsn = item['fsn']
+                title = item['title']
+                price = item['suggested_price']
 
         logger.info(f"\n{'='*60}")
         logger.info(f"Processing SKU={sku}")
