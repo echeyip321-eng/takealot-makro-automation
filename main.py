@@ -258,9 +258,8 @@ def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inve
     }
 
 
-214
-(makro_api, review_queue, takealot_scraper, fsn_finder):
-    """Process approved items and create Makro listings"""
+def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
+        """Process approved items and create Makro listings"""
 
     # Safety check for missing API credentials
     if not makro_api and not DRY_RUN:
