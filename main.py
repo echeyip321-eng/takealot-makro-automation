@@ -255,6 +255,7 @@ def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inve
                 "inventory": inventory
             }
                     }]
+                }
                 
 
 def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
