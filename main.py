@@ -250,14 +250,12 @@ def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inve
                     "fragile": False
                 }
             }],
-            "locations": [{
-                "id": location_id,
+            "locations": {[                "id": location_id,
                 "status": "Active",
                 "inventory": inventory
             }]
-        }]
-    }
-
+                    }]
+                
 
 def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         """Process approved items and create Makro listings"""
