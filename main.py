@@ -262,17 +262,11 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         """Process approved items and create Makro listings"""
 
     # Safety check for missing API credentials
-    if not makro_api and not DRY_RUN:
-        logger.error("Makro API not initialized but DRY_RUN=False. Set credentials or enable DRY_RUN.")
+    if not makro_api and not DRY_RUN:        logger.error("Makro API not initialized but DRY_RUN=False. Set credentials or enable DRY_RUN.")
         return
-
     approved_items = review_queue.get_approved_items()
-
-    if not approved_items:
-        logger.info("No approved items to process")
-        return
-
-    for item in approved_items:
+    if not approved_items:        logger.info("No approved items to process")
+        return    for item in approved_items:
         sku = item['takealot_sku']
         fsn = item['fsn']
         title = item['title']
