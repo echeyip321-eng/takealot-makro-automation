@@ -250,11 +250,10 @@ def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inve
                     "fragile": False
                 }
             }],
-            "locations": {                "id": location_id,
-                "status": "Active",
-                "inventory": inventory
-            }
-                    }]
+                "locations": [{
+                                        "id": location_id,
+                    "status": "Active",
+                    "inventory": inventory                }]                    }]
                 }
                 
 
@@ -267,12 +266,15 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
         return
     
     approved_items = review_queue.get_approved_items()
+    if not approved_items:
         logger.info("No approved items to process")
         return
     
     for item in approved_items:
         sku = item['takealot_sku']
         title = item['title']
+                price = item['suggested_price']
+        fsn = item['fsn']
 
         logger.info(f"\n{'=' * 60}")
         logger.info(f"Processing SKU={sku}")
