@@ -253,7 +253,10 @@ def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inve
                 "locations": [{
                                         "id": location_id,
                     "status": "Active",
-                    "inventory": inventory                }]                    }]
+                    "inventory": inventory
+                                    }]
+                        }]
+                    }
                 }
                 
 
