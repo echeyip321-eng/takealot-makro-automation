@@ -1,0 +1,22 @@
+name: Offline agent tests
+on:
+  push:
+    branches: [fix/security-and-startup-audit]
+  pull_request:
+    branches: [main]
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Syntax check
+        run: python -m py_compile main.py
+      - name: Unit tests (no live API calls)
+        run: python -m unittest discover -s tests -v
+      - name: Demo offline preview
+        run: python main.py --input data/example_candidates.csv --output output
