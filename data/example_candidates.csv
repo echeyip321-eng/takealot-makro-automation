@@ -1,0 +1,4 @@
+Product ID,Title,Category,Source,Source URL,Source Price,Supplier Shipping,Makro Fees,Fulfillment Cost,Returns Reserve,Supplier Authorized,Supplier Stock,TikTok Score,Takealot Score,Competition Score,Approval,FSN,FSN Verified,Pickup Location ID,Length CM,Width CM,Height CM,Weight KG,Dispatch SLA Days,Shipping Provider,Local Shipping Fee,Zonal Shipping Fee,National Shipping Fee
+DEMO-001,Illustrative Storage Organizer,Home,Illustrative only,https://example.org/organizer,200,10,50,20,10,no,0,80,70,20,Needs Review,,no,,,,,,,,,
+DEMO-002,Illustrative USB Lamp,Home,Illustrative only,https://example.org/lamp,100,15,35,20,10,no,0,70,60,50,Needs Review,,no,,,,,,,,,
+DEMO-003,Illustrative Garden Tool,Garden,Illustrative only,https://example.org/garden,300,20,65,30,15,no,0,65,75,30,Needs Review,,no,,,,,,,,,
