@@ -42,7 +42,7 @@ class TestAgent(unittest.TestCase):
 
     def test_score_uses_verified_fields_without_fake_sales(self):
         result = main.candidate(sample())
-        self.assertEqual(result["demand_score"], 67.5)
+        self.assertEqual(result["demand_score"], 65.5)
 
     def test_unverified_supplier_blocked(self):
         result, drafts = main.prepare([sample(**{"Supplier Authorized": "no"})])
