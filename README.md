@@ -1,3 +1,5 @@
+> SECURITY NOTICE: Earlier commits contained API credentials. Rotate/revoke them in Makro Developer Access and replace corresponding Railway variables. Removing secrets from this file does not remove their Git history.
+
 # Takealot-Makro Automation
 
 Automated product arbitrage system that scrapes products from Takealot and creates listings on Makro Marketplace via API.
@@ -34,8 +36,8 @@ The system is pre-configured with:
 Add these variables in Railway dashboard:
 
 ```
-MAKRO_API_KEY=ff05c866-2a98-4f55-b5f0-6a92e40f8e93
-MAKRO_API_SECRET=6e18b3ec-be5d-46e3-ab3e-28d8f6b8fb3a
+MAKRO_API_KEY=<set-in-Railway-environment>
+MAKRO_API_SECRET=<set-in-Railway-environment>
 ```
 
 ### 3. Set Start Command
