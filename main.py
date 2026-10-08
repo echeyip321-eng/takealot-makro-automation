@@ -1,372 +1,279 @@
+"""Prepare Makro product candidates from seller-authorized research data.
+
+Default behavior is OFFLINE and READ-ONLY. The application never researches
+Takealot by scraping it or uploads listings without explicit opt-in.
+"""
+import argparse
+import csv
+import json
+import logging
 import os
 import re
-import time
-import logging
-import requests
-from datetime import datetime
-import json
-import csv
-import io
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
+from urllib.request import Request, urlopen
+from urllib.parse import urlencode
+import base64
 
-# Logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
-
-# Configuration from env
-MARKUP_MULTIPLIER = float(os.getenv('MARKUP_MULTIPLIER', 2.8))
-MIN_MARGIN_THRESHOLD = float(os.getenv('MIN_MARGIN_THRESHOLD', 0.3))
-MAX_CANDIDATES_PER_RUN = int(os.getenv('MAX_CANDIDATES_PER_RUN', 10))
-RUN_MODE = os.getenv('RUN_MODE', 'once')
-MAKRO_APP_ID = os.getenv('MAKRO_API_KEY', '')
-MAKRO_APP_SECRET = os.getenv('MAKRO_API_SECRET', '')
-DRY_RUN = os.getenv('DRY_RUN', '1') == '1'
-GOOGLE_SHEETS_CSV_URL = os.getenv('GOOGLE_SHEETS_CSV_URL', '')
-MODE = os.getenv('MODE', 'ingest')
+LOG = logging.getLogger("makro_agent")
+ZAR = Decimal("0.01")
+FSN_PATTERN = re.compile(r"^[A-Z0-9]{13,16}$")
 
 
-def to_float(value, default=0.0):
-    """Safely parse float from string, handling commas and currency symbols"""
+def number(value):
+    """Read numeric CSV data; missing/invalid values remain unknown."""
+    if value is None or str(value).strip() == "":
+        return None
     try:
-        s = (value or '').strip().replace('R', '').replace(',', '')
-        return float(s) if s else default
-    except Exception:
-        return default
+        return Decimal(str(value).strip().replace(",", "").replace("R", "").replace("%", ""))
+    except InvalidOperation:
+        return None
 
 
-class MakroFSNFinder:
-    """Automatically find FSN IDs by searching Makro's website"""
-
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        })
-
-    def search_makro(self, product_title):
-        try:
-            search_query = (
-                product_title
-                .replace('DH - ', '')
-                .replace('Cappuccino', '')
-                .strip()
-            )
-
-            logger.info(f"Searching Makro for: {search_query}")
-
-            search_url = f"https://www.makro.co.za/search?q={requests.utils.quote(search_query)}"
-            resp = self.session.get(search_url, timeout=30)
-            resp.raise_for_status()
-
-            fsn_matches = re.findall(r'pid=([A-Z0-9]{13,16})', resp.text)
-
-            if fsn_matches:
-                fsn = list(dict.fromkeys(fsn_matches))[0]
-                logger.info(f"  ✅ Found FSN: {fsn}")
-                return fsn
-
-            logger.warning(f"  ⚠️ No FSN found for: {product_title}")
-            return None
-
-        except Exception as e:
-            logger.error(f"Error searching Makro: {e}")
-            return None
+def amount(value):
+    value = number(value)
+    return value.quantize(ZAR, rounding=ROUND_HALF_UP) if value is not None else None
 
 
-class MakroAuth:
-    def __init__(self, app_id, app_secret):
-        self.app_id = app_id
-        self.app_secret = app_secret
-        self.token = None
-        self.expiry = 0
-        self.token_url = 'https://seller.makro.co.za/api/oauth-service/oauth/token'
-
-    def get_token(self):
-        if self.token and time.time() < self.expiry:
-            return self.token
-
-        logger.info("Fetching new OAuth access token...")
-
-        resp = requests.get(
-            self.token_url,
-            params={
-                'grant_type': 'client_credentials',
-                'scope': 'Seller_Api'
-            },
-            auth=(self.app_id, self.app_secret),
-            timeout=30
-        )
-        resp.raise_for_status()
-
-        data = resp.json()
-        self.token = data['access_token']
-        self.expiry = time.time() + data.get('expires_in', 3600) - 60
-
-        logger.info("Successfully obtained OAuth token")
-        return self.token
+def yes(value):
+    return str(value or "").strip().lower() in ("yes", "true", "1")
 
 
-class MakroApi:
-    def __init__(self, auth: MakroAuth):
-        self.auth = auth
-        self.base_url = 'https://seller.makro.co.za/api'
-        self.session = requests.Session()
-
-    def _headers(self):
-        return {
-            'Authorization': f'Bearer {self.auth.get_token()}',
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-        }
-
-    def _request(self, method, endpoint, json_body=None):
-        url = f"{self.base_url}{endpoint}"
-
-        resp = self.session.request(
-            method,
-            url,
-            headers=self._headers(),
-            json=json_body,
-            timeout=30,
-            allow_redirects=False
-        )
-
-        # Check for redirects (3xx status codes)
-        if 300 <= resp.status_code < 400:
-            logger.error(f"REDIRECT: {resp.status_code} {method} {url}")
-            logger.error(f"Location: {resp.headers.get('Location')}")
-            raise RuntimeError("Makro API redirected to a different host. Blocked for safety")
-
-        if resp.status_code >= 400:
-            logger.error(f"HTTP {resp.status_code}: {method} {url}")
-            logger.error(f"Body: {resp.text[:10000]}")
-            resp.raise_for_status()
-
-        return resp.json() if resp.text else None
-
-    def create_listing(self, payload):
-        """Create a new listing"""
-        return self._request('POST', '/listings/v5/', json_body=payload)
+def whole(value, minimum=0):
+    parsed = number(value)
+    if parsed is None or parsed != parsed.to_integral_value() or parsed < minimum:
+        return None
+    return int(parsed)
 
 
-class ReviewQueue:
-    def __init__(self, csv_url):
-        self.csv_url = csv_url
-
-    def get_approved_items(self):
-        if not self.csv_url:
-            logger.error("GOOGLE_SHEETS_CSV_URL not configured")
-            return []
-
-        try:
-            logger.info("Fetching candidate items from Google Sheets...")
-            resp = requests.get(self.csv_url, timeout=30)
-            resp.raise_for_status()
-
-            csv_data = csv.DictReader(io.StringIO(resp.text))
-            approved = []
-
-            for row in csv_data:
-                status = row.get('Status', '').strip().lower()
-                sku = row.get('Takealot SKU', '').strip()
-
-                logger.info(f"Row: SKU={sku} Status={status}")
-
-                if status == 'approved':
-                    approved.append({
-                        'takealot_sku': sku,
-                        'fsn': row.get('FSN', '').strip(),
-                        'title': row.get('Title', '').strip(),
-                        'takealot_price': to_float(row.get('Takealot Price')),
-                        'suggested_price': to_float(row.get('Suggested Makro Price')),
-                        'margin': to_float(row.get('Margin %')),
-                    })
-
-            logger.info(f"Found {len(approved)} approved items")
-            return approved
-
-        except Exception as e:
-            logger.error(f"Failed to fetch approved items: {e}")
-            return []
-
-    def mark_as_listed(self, takealot_sku, listing_id):
-        logger.info(f"Would mark {takealot_sku} as listed with Makro listing {listing_id}")
+def score_field(row, name):
+    v = number(row.get(name))
+    return float(v) if v is not None and 0 <= v <= 100 else None
 
 
-class TakealotScraper:
-    def get_product_info(self, sku):
-        return {
-            'title': f'Sample Product {sku}',
-            'price': 199.99,
-            'available': True,
-            'image_url': 'https://example.com/image.jpg'
-        }
+def candidate(row, markup=Decimal("2"), minimum_profit=Decimal("50"),
+              minimum_margin=Decimal("15")):
+    """Evaluate product eligibility without guessing missing costs or demand."""
+    title = (row.get("Title") or "").strip()
+    ref = (row.get("Product ID") or "").strip()
+    source = (row.get("Source URL") or "").strip()
+    cost = amount(row.get("Source Price"))
+    shipping = amount(row.get("Supplier Shipping"))
+    fees = amount(row.get("Makro Fees"))
+    fulfillment = amount(row.get("Fulfillment Cost"))
+    returns = amount(row.get("Returns Reserve"))
+    price = (cost * markup).quantize(ZAR, rounding=ROUND_HALF_UP) if cost is not None else None
+    notes = []
+
+    if not ref or not title:
+        notes.append("missing product ID/title")
+    if not source.startswith(("https://", "http://")):
+        notes.append("missing supplier product URL")
+    if not yes(row.get("Supplier Authorized")):
+        notes.append("resale/fulfillment permission unverified")
+    stock = whole(row.get("Supplier Stock"), minimum=0)
+    if stock is None:
+        notes.append("supplier stock unverified")
+    elif stock == 0:
+        notes.append("supplier out of stock")
+    if cost is None or cost <= 0:
+        notes.append("missing/invalid supplier price")
+    for label, val in (("supplier shipping", shipping), ("Makro fees", fees),
+                       ("fulfillment cost", fulfillment), ("returns reserve", returns)):
+        if val is None or val < 0:
+            notes.append("missing/invalid " + label)
+
+    profit = None
+    margin = None
+    if price is not None and price > 0 and all(
+            v is not None and v >= 0 for v in (shipping, fees, fulfillment, returns)):
+        profit = price - cost - shipping - fees - fulfillment - returns
+        margin = (profit / price * 100).quantize(ZAR, rounding=ROUND_HALF_UP)
+        if profit < minimum_profit:
+            notes.append("estimated profit below threshold")
+        if margin < minimum_margin:
+            notes.append("estimated margin below threshold")
+
+    tiktok = score_field(row, "TikTok Score")
+    takealot = score_field(row, "Takealot Score")
+    competition = score_field(row, "Competition Score")
+    # Scores are analyst-entered observations, NOT verified sales volumes.
+    rank = None
+    if all(v is not None for v in (tiktok, takealot, competition, margin)):
+        rank = round(.3 * tiktok + .4 * takealot +
+                     .2 * min(100, max(0, float(margin))) +
+                     .1 * (100 - competition), 1)
+
+    return {
+        "product_id": ref, "title": title, "category": row.get("Category", ""),
+        "source": row.get("Source", ""), "source_url": source,
+        "source_price_zar": str(cost) if cost is not None else "",
+        "selling_price_zar": str(price) if price is not None else "",
+        "estimated_profit_zar": str(profit) if profit is not None else "",
+        "estimated_margin_pct": str(margin) if margin is not None else "",
+        "demand_score": rank if rank is not None else "",
+        "status": "QUALIFIED" if not notes else "NEEDS_REVIEW",
+        "issues": "; ".join(notes),
+    }
 
 
-def ingest_mode(makro_api, takealot_scraper):
-    logger.info("=== INGEST MODE ===")
-    logger.info("Populate Google Sheet with candidates")
+def listing_payload(row, review):
+    """Only a manually approved, qualified row can become an INACTIVE preview."""
+    if review["status"] != "QUALIFIED" or (row.get("Approval") or "").strip().lower() != "approved":
+        return None, "not qualified and explicitly approved"
+    fsn = (row.get("FSN") or "").strip()
+    if not FSN_PATTERN.fullmatch(fsn) or not yes(row.get("FSN Verified")):
+        return None, "exact Makro catalog FSN has not been verified"
+    location = (row.get("Pickup Location ID") or "").strip()
+    if not location:
+        return None, "pickup location ID missing"
+    dimensions = [whole(row.get(k), 1) for k in ("Length CM", "Width CM", "Height CM")]
+    weight = number(row.get("Weight KG"))
+    sla = whole(row.get("Dispatch SLA Days"), 1)
+    if any(x is None for x in dimensions) or weight is None or weight <= 0 or sla is None:
+        return None, "real package dimensions, weight or dispatch SLA missing"
+    provider = (row.get("Shipping Provider") or "").strip().upper()
+    if provider not in ("SELLER", "MAKRO"):
+        return None, "shipping provider missing or unsupported"
+    shipping_fees = [whole(row.get(k)) for k in
+                     ("Local Shipping Fee", "Zonal Shipping Fee", "National Shipping Fee")]
+    if any(x is None for x in shipping_fees):
+        return None, "Makro shipping fees missing"
+    sku = review["product_id"]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,60}", sku):
+        return None, "product ID cannot be used as a Makro SKU"
+    price = float(Decimal(review["selling_price_zar"]))
+    payload = {
+        "product_id": fsn,
+        "listing_status": "INACTIVE",
+        "sku_id": sku,
+        "selling_region_pref": "National",
+        "min_oq": 1,
+        "max_oq": 1,
+        "price": {"base_price": price, "selling_price": price, "currency": "ZAR"},
+        "shipping_fees": dict(zip(("local", "zonal", "national"), shipping_fees)),
+        "fulfillment_profile": "NON_FBM",
+        "fulfillment": {"dispatch_sla": sla, "shipping_provider": provider,
+                        "procurement_type": "REGULAR"},
+        "packages": [{"name": "seller_verified",
+                      "dimensions": dict(zip(("length", "breadth", "height"), dimensions)),
+                      "weight": float(weight),
+                      "handling": {"fragile": yes(row.get("Fragile"))}}],
+        # Only use seller-verified physical inventory. Never advertise inferred stock.
+        "locations": {"id": location, "status": "Active", "inventory": 0},
+    }
+    return payload, ""
 
 
-def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inventory: int = 0):
-        """Build Makro SA v5 API listing payload (snake_case as per Seller API guide)"""
-        return {
-        "listing_records": [{
-            "product_id": fsn,
-            "listing_status": "INACTIVE",
-            "sku_id": sku,
-            "selling_region_pref": "National",
-            "min_oq": 1,
-            "max_oq": 100,
-            "price": {
-                "base_price": price,
-                "selling_price": price,
-                "currency": "ZAR"
-            },
-            "shipping_fees": {
-                "local": 1,
-                "zonal": 1,
-                "national": 1
-            },
-            "fulfillment_profile": "NON_FBM",
-            "fulfillment": {
-                "dispatch_sla": 3,
-                "shipping_provider": "SELLER",
-                "procurement_type": "REGULAR"
-            },
-            "packages": [{
-                "name": "standard",
-                "dimensions": {
-                    "length": 30,
-                    "breadth": 30,
-                    "height": 30
-                },
-                "weight": 5,
-                "description": "Standard package",
-                "handling": {
-                    "fragile": False
-                }
-            }],
-                "locations": {
-                                        "id": location_id,
-                    "status": "Active",
-                    "inventory": inventory
-                                    }
-                        }]
-                    }
-                
+def read_candidates(path):
+    with open(path, newline="", encoding="utf-8-sig") as stream:
+        return list(csv.DictReader(stream))
 
-def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
-    """Process approved items and create Makro listings"""
 
-    # Safety check for missing API credentials
-    if not makro_api and not DRY_RUN:
-        logger.error("Makro API not initialized but DRY_RUN=False. Set credentials or enable DRY_RUN.")
-        return
-    
-    approved_items = review_queue.get_approved_items()
-    if not approved_items:
-        logger.info("No approved items to process")
-        return
-    
-    for item in approved_items:
-        sku = item['takealot_sku']
-        title = item['title']
-        price = item['suggested_price']
-        fsn = item['fsn']
+def prepare(rows, markup=Decimal("2"), min_profit=Decimal("50"),
+            min_margin=Decimal("15")):
+    results, drafts = [], []
+    seen_skus, seen_fsns = set(), set()
+    for row in rows:
+        review = candidate(row, markup, min_profit, min_margin)
+        if review["product_id"] in seen_skus:
+            review["status"] = "NEEDS_REVIEW"
+            review["issues"] += "; duplicate product ID"
+        seen_skus.add(review["product_id"])
+        payload, reason = listing_payload(row, review)
+        if payload and payload["product_id"] in seen_fsns:
+            payload, reason = None, "duplicate Makro FSN"
+        if payload:
+            seen_fsns.add(payload["product_id"])
+            drafts.append(payload)
+        review["listing_preview"] = "READY" if payload else "BLOCKED: " + reason
+        results.append(review)
+    results.sort(key=lambda x: (x["demand_score"] == "",
+                                -(float(x["demand_score"]) if x["demand_score"] != "" else -1),
+                                x["title"]))
+    return results, drafts
 
-        logger.info(f"\n{'=' * 60}")
-        logger.info(f"Processing SKU={sku}")
-        logger.info(f"Title: {title}")
-        logger.info(f"Price: R{price}")
 
-        # Skip items with invalid price
-        if price <= 0:
-            logger.warning(f"Outcome=SKIPPED reason=INVALID_PRICE SKU={sku}")
-            continue
-
-        # Auto-find FSN if missing
-        if not fsn:
-            logger.info("FSN not provided, searching Makro...")
-            fsn = fsn_finder.search_makro(title)
-            if not fsn:
-                logger.warning("Outcome=SKIPPED reason=NO_FSN")
-                continue
-
-        payload = build_makro_listing(
-            fsn=fsn,
-            sku=sku,
-            price=price,
-            location_id=os.getenv('MAKRO_LOCATION_ID', '')
-        )
-
-        if not os.getenv('MAKRO_LOCATION_ID'):
-            logger.warning('Outcome=SKIPPED reason=MISSING_LOCATION_ID')
-            continue
-
-        if DRY_RUN:
-            logger.info(f"[DRY RUN] Would create listing with payload: {json.dumps(payload, indent=2)}")
-            logger.info("Outcome=DRY_RUN_SUCCESS")
+def save(results, drafts, outdir):
+    outdir.mkdir(parents=True, exist_ok=True)
+    with (outdir / "shortlist.csv").open("w", newline="", encoding="utf-8") as f:
+        if results:
+            writer = csv.DictWriter(f, fieldnames=list(results[0]))
+            writer.writeheader()
+            writer.writerows(results)
         else:
-            try:
-                logger.info("Creating Makro listing...")
-                result = makro_api.create_listing(payload) or {}
-                records = result.get('listing_records', [])
-                if not records or records[0].get('status') != 'SUCCESS':
-                    raise RuntimeError(f'Makro listing failed: {result}')
-                listing_id = records[0].get('listing_id', 'unknown')
-                logger.info("✅ Successfully created listing")
-                logger.info(f"Listing ID: {listing_id}")
-                logger.info(f"Outcome=CREATED listing_id={listing_id}")
-
-                review_queue.mark_as_listed(sku, listing_id)
-
-            except Exception as e:
-                logger.error(f"❌ Failed to create listing: {e}")
-                logger.error(f"Outcome=FAILED error={str(e)[:200]}")
+            f.write("product_id,title,status,issues\n")
+    # A PREVIEW only; this file is NOT transmitted to Makro.
+    (outdir / "inactive_listing_previews.json").write_text(
+        json.dumps({"listing_records": drafts}, indent=2), encoding="utf-8")
+    summary = {
+        "researched": len(results),
+        "qualified": sum(r["status"] == "QUALIFIED" for r in results),
+        "approved_inactive_previews": len(drafts),
+        "live_posts": 0
+    }
+    (outdir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
 
 
-def main():
-    """Main entry point"""
-    logger.info("=" * 60)
-    logger.info("=== Starting Takealot-Makro Automation ===")
-    logger.info(f"Mode: {MODE}")
-    logger.info(f"DRY RUN: {DRY_RUN}")
-    logger.info(f"Google Sheets URL configured: {bool(GOOGLE_SHEETS_CSV_URL)}")
-    logger.info(f"Makro credentials configured: {bool(MAKRO_APP_ID and MAKRO_APP_SECRET)}")
-    logger.info("=" * 60)
+class MakroClient:
+    """Connection adapter. Never invoked by normal prep mode or automated tests."""
 
-    # Initialize components
-    fsn_finder = MakroFSNFinder()
-    review_queue = ReviewQueue(GOOGLE_SHEETS_CSV_URL)
-    takealot_scraper = TakealotScraper()
+    def __init__(self, app_id, secret):
+        if not app_id or not secret:
+            raise ValueError("Makro API credentials must be supplied securely")
+        self.app_id, self.secret = app_id, secret
 
-    # Initialize Makro API if credentials provided
-    makro_api = None
-    if MAKRO_APP_ID and MAKRO_APP_SECRET:
-        try:
-            auth = MakroAuth(MAKRO_APP_ID, MAKRO_APP_SECRET)
-            makro_api = MakroApi(auth)
-            logger.info("Makro API initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize Makro API: {e}")
-    else:
-        logger.warning("Makro API credentials not provided")
+    def token(self):
+        auth = base64.b64encode(f"{self.app_id}:{self.secret}".encode()).decode()
+        req = Request(
+            "https://seller.makro.co.za/api/oauth-service/oauth/token?" +
+            urlencode({"grant_type": "client_credentials", "scope": "Seller_Api"}),
+            headers={"Authorization": "Basic " + auth},
+            method="GET",
+        )
+        with urlopen(req, timeout=30) as response:
+            return json.loads(response.read().decode())["access_token"]
 
-    # Run based on MODE
-    if MODE == 'ingest':
-        ingest_mode(makro_api, takealot_scraper)
-    elif MODE == 'activate':
-        activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder)
-    else:
-        logger.error(f"Unknown MODE: {MODE}")
+    def upload_inactive(self, records, token):
+        if any(r.get("listing_status") != "INACTIVE" or
+               r.get("locations", {}).get("inventory") != 0 for r in records):
+            raise ValueError("Only inactive, zero-inventory listings are permitted")
+        if not records or len(records) > 10:
+            raise ValueError("Makro batches must contain 1-10 listings")
+        req = Request(
+            "https://seller.makro.co.za/api/listings/v5/",
+            data=json.dumps({"listing_records": records}).encode(),
+            headers={"Authorization": "Bearer " + token,
+                     "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=30) as response:
+            return json.loads(response.read().decode())
 
-    logger.info("=" * 60)
-    logger.info("=== Finished ===")
-    logger.info("=" * 60)
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Offline Makro listing preparation")
+    parser.add_argument("--input", default="data/example_candidates.csv")
+    parser.add_argument("--output", default="output")
+    parser.add_argument("--mode", choices=("prepare", "upload"), default="prepare")
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    if args.mode == "upload":
+        # Deliberately locked until owner separately approves deployment/publishing.
+        raise SystemExit("LIVE UPLOAD DISABLED. Request a separate release approval.")
+
+    markup = number(os.getenv("MARKUP_MULTIPLIER", "2"))
+    min_profit = number(os.getenv("MIN_NET_PROFIT_ZAR", "50"))
+    min_margin = number(os.getenv("MIN_MARGIN_PERCENT", "15"))
+    if any(v is None or v <= 0 for v in (markup, min_profit, min_margin)):
+        raise SystemExit("Invalid pricing configuration")
+    rows = read_candidates(args.input)
+    results, drafts = prepare(rows, markup, min_profit, min_margin)
+    summary = save(results, drafts, Path(args.output))
+    LOG.info("Offline preview finished: %s", summary)
+    return summary
 
 
 if __name__ == "__main__":
