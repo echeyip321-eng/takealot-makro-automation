@@ -175,7 +175,7 @@ class ReviewQueue:
 
                 logger.info(f"Row: SKU={sku} Status={status}")
 
-                if status in ['approved', 'candidate']:
+                if status == 'approved':
                     approved.append({
                         'takealot_sku': sku,
                         'fsn': row.get('FSN', '').strip(),
@@ -211,12 +211,12 @@ def ingest_mode(makro_api, takealot_scraper):
     logger.info("Populate Google Sheet with candidates")
 
 
-def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inventory: int = 10):
+def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inventory: int = 0):
         """Build Makro SA v5 API listing payload (snake_case as per Seller API guide)"""
         return {
         "listing_records": [{
             "product_id": fsn,
-            "listing_status": "ACTIVE",
+            "listing_status": "INACTIVE",
             "sku_id": sku,
             "selling_region_pref": "National",
             "min_oq": 1,
@@ -250,18 +250,17 @@ def build_makro_listing(fsn: str, sku: str, price: float, location_id: str, inve
                     "fragile": False
                 }
             }],
-                "locations": [{
+                "locations": {
                                         "id": location_id,
                     "status": "Active",
                     "inventory": inventory
-                                    }]
+                                    }
                         }]
                     }
-                }
                 
 
 def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
-        """Process approved items and create Makro listings"""
+    """Process approved items and create Makro listings"""
 
     # Safety check for missing API credentials
     if not makro_api and not DRY_RUN:
@@ -276,7 +275,7 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
     for item in approved_items:
         sku = item['takealot_sku']
         title = item['title']
-                price = item['suggested_price']
+        price = item['suggested_price']
         fsn = item['fsn']
 
         logger.info(f"\n{'=' * 60}")
@@ -301,8 +300,12 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
             fsn=fsn,
             sku=sku,
             price=price,
-            location_id=os.getenv('MAKRO_LOCATION_ID', 'LOC4cef7f9b88a14df79646ba1c9dca25e9')
+            location_id=os.getenv('MAKRO_LOCATION_ID', '')
         )
+
+        if not os.getenv('MAKRO_LOCATION_ID'):
+            logger.warning('Outcome=SKIPPED reason=MISSING_LOCATION_ID')
+            continue
 
         if DRY_RUN:
             logger.info(f"[DRY RUN] Would create listing with payload: {json.dumps(payload, indent=2)}")
@@ -311,7 +314,10 @@ def activate_mode(makro_api, review_queue, takealot_scraper, fsn_finder):
             try:
                 logger.info("Creating Makro listing...")
                 result = makro_api.create_listing(payload) or {}
-                listing_id = result.get('listing_id', 'unknown')
+                records = result.get('listing_records', [])
+                if not records or records[0].get('status') != 'SUCCESS':
+                    raise RuntimeError(f'Makro listing failed: {result}')
+                listing_id = records[0].get('listing_id', 'unknown')
                 logger.info("✅ Successfully created listing")
                 logger.info(f"Listing ID: {listing_id}")
                 logger.info(f"Outcome=CREATED listing_id={listing_id}")
