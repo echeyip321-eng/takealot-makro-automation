@@ -1,118 +1,111 @@
-> SECURITY NOTICE: Earlier commits contained API credentials. Rotate/revoke them in Makro Developer Access and replace corresponding Railway variables. Removing secrets from this file does not remove their Git history.
+# Jophil Makro Marketplace Automation — safe rebuild
 
-# Takealot-Makro Automation
+> **TEST VERSION ONLY. NOT DEPLOYED.**
+>
+> The application produces an offline product shortlist and Makro listing previews.
+> **It cannot submit live Makro listings:** `--mode upload` deliberately exits with an error.
+> This is a staging rebuild for owner approval, not an autonomous dropshipping robot.
 
-Automated product arbitrage system that scrapes products from Takealot and creates listings on Makro Marketplace via API.
+## Critical credential warning
 
-## Features
+An earlier commit to this public repository included an apparent Makro API key and secret.
+Those credentials may still be retrievable from Git history even though this README
+no longer displays them. **Immediately revoke/rotate that key pair** in Makro
+Developer Access and replace any corresponding Railway environment variables.
+Do not paste keys into chat, issues, screenshots, CSV files, or git commits.
 
-- **Automated Product Discovery**: Scrapes Takealot for products in target category (Air Fryers)
-- **Smart Pricing**: Applies 2.8x markup automatically for optimal margins
-- **Duplicate Detection**: Checks existing Makro listings to avoid duplicates
-- **Draft Mode**: Creates listings as drafts (INACTIVE) for manual photo upload
-- **Scheduled Sync**: Runs every 10 minutes to continuously find new products
-- **API Integration**: Uses Makro Marketplace API for reliable listing creation
+## What currently works
 
-## Configuration
+1. Read a CSV of product candidates supplied through **authorized, permitted research**.
+2. Calculate a proposed **2x purchase price** in South African rand (configurable).
+3. Deduct **provided** supplier shipping, Makro fees, fulfillment cost, and returns reserve.
+4. Reject unverified resale permission, missing costs, and unavailable supplier stock.
+5. Rank products when researchers provide TikTok South Africa, Takealot popularity,
+   and Makro competition scores (0–100). These are **researcher-entered signals**,
+   not measured sales counts or scraped data.
+6. Require explicit **Approved** status, verified Makro product FSN, package
+   measurements, location ID and realistic dispatch information before preparing a draft.
+7. Export `output/shortlist.csv`, `output/inactive_listing_previews.json` and
+   `output/summary.json` for review. No data is sent to Makro in this version.
 
-The system is pre-configured with:
-- **Category**: Air Fryers
-- **Markup**: 2.8x
-- **Products per run**: 10
-- **Sync frequency**: Every 10 minutes
-- **Manufacturer/Packer**: N/A (as required)
+## What is not implemented yet
 
-## Setup on Railway
+- Autonomous TikTok product discovery or fetching Takealot popularity data.
+- Live stock feeds or supplier API connections; buyer/seller authorization is required.
+- Automatic daily schedules, dashboard, notifications, or persistent inventory syncing.
+- Publishing to Makro or introducing products not already in its catalog.
+- Order fulfillment and fulfillment timing verification.
 
-### 1. Deploy to Railway
+Takealot/TikTok pages must not be scraped or copied without relevant permissions.
+The seller must confirm sourcing arrangements and Makro's current fulfillment rules.
 
-1. Go to [Railway](https://railway.app)
-2. Click "New Project" → "Deploy from GitHub repo"
-3. Connect your GitHub account and select `echeyip321-eng/takealot-makro-automation`
-4. Railway will automatically detect the Python project
+## How to test
 
-### 2. Configure Environment Variables
+Use Python 3.11+:
 
-Add these variables in Railway dashboard:
-
-```
-MAKRO_API_KEY=<set-in-Railway-environment>
-MAKRO_API_SECRET=<set-in-Railway-environment>
-```
-
-### 3. Set Start Command
-
-In Railway settings, set the start command:
-```
-python main.py
-```
-
-### 4. Deploy
-
-Railway will:
-- Install dependencies from `requirements.txt`
-- Start the automation
-- Keep it running 24/7
-
-## How It Works
-
-1. **Search Takealot**: Finds Air Fryer products
-2. **Extract Details**: Gets title, price, product URL
-3. **Check Duplicates**: Verifies product doesn't exist on Makro
-4. **Calculate Price**: Applies 2.8x markup to Takealot price
-5. **Create Listing**: Posts to Makro API as INACTIVE (draft)
-6. **Manual Photos**: You add photos and activate listing
-7. **Repeat**: Runs every 10 minutes automatically
-
-## Product Details Created
-
-- **Title**: From Takealot
-- **Description**: From Takealot
-- **Price (MRP & Selling)**: Takealot price × 2.8
-- **SKU**: Auto-generated (TA-{PLID}-{timestamp})
-- **Brand**: Generic
-- **Stock**: 0 (no inventory initially)
-- **Status**: INACTIVE (draft for photo upload)
-- **Manufacturer**: N/A
-- **Packer**: N/A
-
-## Monitoring
-
-The system logs:
-- Products found on Takealot
-- Duplicates skipped
-- Listings created successfully
-- API errors
-- Sync schedule
-
-## Workflow
-
-1. System finds new Air Fryer on Takealot
-2. Creates draft listing on Makro
-3. You receive notification (check Makro dashboard)
-4. Open Takealot product page (kept open in tabs)
-5. Download photos from Takealot
-6. Upload to Makro draft listing
-7. Activate listing
-8. Profit!
-
-## Customization
-
-To change settings, edit `main.py`:
-
-```python
-TARGET_CATEGORY = 'Air Fryers'  # Change category
-MARKUP_MULTIPLIER = 2.8          # Change markup
-MAX_PRODUCTS_PER_RUN = 10        # Products per sync
+```bash
+python -m unittest discover -s tests -v
+python main.py --input data/example_candidates.csv --output output
 ```
 
-## Support
+The three demo records in `data/example_candidates.csv` are **illustrations only**.
+They are intentionally unapproved, have no verified stock, and will not produce
+Makro listing previews. Results are in the `output/` directory.
 
-API Credentials: From Makro Developer Access
-Seller ID: 2303
-API Base URL: https://api.makromarketplace.co.za/rest/v2/
+For real evaluation, create a copy of the CSV with supplier-approved products and
+actual verified cost/stock/fulfillment data. Fill out the following columns:
 
----
+- Identification: Product ID, Title, Category, Source, Source URL
+- Cost: Source Price, Supplier Shipping, Makro Fees, Fulfillment Cost, Returns Reserve
+- Eligibility: Supplier Authorized (yes/no), Supplier Stock
+- Optional demand scores: TikTok Score, Takealot Score, Competition Score (0-100)
+- Makro preview (requires all): Approval (Approved), FSN, FSN Verified (yes),
+  Pickup Location ID, Length CM, Width CM, Height CM, Weight KG,
+  Dispatch SLA Days, Shipping Provider (SELLER or MAKRO),
+  Local Shipping Fee, Zonal Shipping Fee, National Shipping Fee
+- Optional: Fragile (yes/no)
 
-**Status**: Ready for Railway deployment
-**Goal**: 20-50 products/day automated
+Do **not** put credentials into the CSV.
+
+### Pricing
+
+Defaults:
+- Markup: 2x source product price
+- Minimum **estimated** profit: R50
+- Minimum **estimated** margin: 15%
+
+Set `MARKUP_MULTIPLIER`, `MIN_NET_PROFIT_ZAR`, and
+`MIN_MARGIN_PERCENT` to change the defaults.
+
+**Example:** A product purchased for R200 is proposed at R400.
+After R10 supplier shipping, R50 Makro fees, R20 fulfillment and
+R10 returns allowance, estimated net profit is R110 (27.5%).
+Real fees, VAT obligations and actual order costs must be verified before selling.
+
+Ranking score = 40% Takealot observation + 30% TikTok observation
++ 20% estimated margin + 10% low-competition score.
+Missing data is labeled unknown rather than being invented.
+
+### Makro API
+
+The Makro seller documentation supports creating and updating **listings attached to
+existing catalog products** through a verified `product_id` (FSN). It specifies a
+maximum of 10 listing records in a request. The code retains a Makro authentication
+and inactive-listing client adapter for eventual approved use, but this staging
+version has **no executable live-upload path**.
+
+Any prepared payload uses `INACTIVE` and zero inventory. Nothing should be activated
+or advertised as available until stock, procurement and dispatch are verified.
+
+## Railway and account safety
+
+Do not point Railway to this testing branch or merge the draft PR without owner approval.
+The seller account previously displayed an `ONHOLD` notice; resolve that separately
+before any live automation. Do not attempt to bypass account restrictions.
+
+## Tests and status
+
+GitHub Actions runs a syntax check, 12 unit tests, and an offline demo preview.
+All tests are designed to run without any live supplier or Makro network requests.
+
+Current staging PR: [View the rebuild](https://github.com/echeyip321-eng/takealot-makro-automation/pull/1)
